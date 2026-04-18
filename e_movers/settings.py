@@ -3,6 +3,9 @@ from pathlib import Path
 from datetime import timedelta
 
 import dj_database_url
+from dotenv import load_dotenv  # ← add this
+
+load_dotenv()
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
