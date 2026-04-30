@@ -120,7 +120,7 @@ No circular imports. Cross-app imports flow strictly downward.
 ### macOS / Linux
 
 ```bash
-git clone <repo>
+git clone https://github.com/Paulmwas/e_movers_backend
 cd e_movers_backend
 python3 -m venv venv
 source venv/bin/activate
