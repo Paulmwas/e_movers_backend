@@ -133,7 +133,7 @@ python manage.py runserver
 ### Windows
 
 ```powershell
-git clone <repo>
+git clone https://github.com/Paulmwas/e_movers_backend
 cd e_movers_backend
 python -m venv venv
 venv\Scripts\activate
