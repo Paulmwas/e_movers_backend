@@ -1,5 +1,5 @@
 from django.contrib import admin
-from .models import Job, JobAssignment, JobTruck
+from .models import Job, JobAssignment, JobTruck, JobApplication
 
 
 class JobAssignmentInline(admin.TabularInline):
@@ -12,6 +12,13 @@ class JobTruckInline(admin.TabularInline):
     model = JobTruck
     extra = 0
     readonly_fields = ["assigned_at", "assigned_by"]
+
+
+class JobApplicationInline(admin.TabularInline):
+    model = JobApplication
+    extra = 0
+    readonly_fields = ["applied_at", "reviewed_at", "reviewed_by"]
+    fields = ["staff", "status", "note", "applied_at", "reviewed_at", "reviewed_by"]
 
 
 @admin.register(Job)
@@ -28,7 +35,7 @@ class JobAdmin(admin.ModelAdmin):
         "customer__email",
     ]
     readonly_fields = ["created_by", "created_at", "updated_at", "started_at", "completed_at"]
-    inlines = [JobAssignmentInline, JobTruckInline]
+    inlines = [JobApplicationInline, JobAssignmentInline, JobTruckInline]
     ordering = ["-scheduled_date"]
 
 
@@ -43,3 +50,17 @@ class JobAssignmentAdmin(admin.ModelAdmin):
 class JobTruckAdmin(admin.ModelAdmin):
     list_display = ["job", "truck", "assigned_at", "assigned_by"]
     readonly_fields = ["assigned_at"]
+
+
+@admin.register(JobApplication)
+class JobApplicationAdmin(admin.ModelAdmin):
+    list_display = ["job", "staff", "status", "applied_at", "reviewed_by", "reviewed_at"]
+    list_filter = ["status"]
+    search_fields = [
+        "job__title",
+        "staff__first_name",
+        "staff__last_name",
+        "staff__email",
+    ]
+    readonly_fields = ["applied_at", "reviewed_at"]
+    ordering = ["-applied_at"]

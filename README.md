@@ -7,6 +7,7 @@
 
 ## Table of Contents
 
+0. [Updates](#updates)
 1. [Overview](#1-overview)
 2. [Tech Stack](#2-tech-stack)
 3. [Project Structure](#3-project-structure)
@@ -32,6 +33,127 @@
 11. [Running Tests](#11-running-tests)
 12. [Database Reset & Re-seed](#12-database-reset--re-seed)
 13. [Deployment Notes](#13-deployment-notes)
+
+---
+
+## Updates
+
+> **Last updated: 2026-05-05**
+
+### What changed
+
+#### 1. Public staff availability form (no login required)
+
+Staff no longer need to log in to indicate availability for a job. Two new public endpoints allow staff to apply or withdraw using only their email address.
+
+| Method | Endpoint | Auth | Description |
+|---|---|---|---|
+| `GET` | `/api/v1/jobs/public/` | None | Browse all PENDING jobs open for applications |
+| `POST` | `/api/v1/jobs/<id>/public-apply/` | None | Confirm availability — creates a JobApplication |
+| `DELETE` | `/api/v1/jobs/<id>/public-apply/` | None | Withdraw availability |
+
+**How it works (public apply):**
+
+```
+POST /api/v1/jobs/3/public-apply/
+Content-Type: application/json
+
+{ "email": "staff05@emovers.co.ke" }
+```
+
+Response `201`:
+```json
+{
+  "message": "Availability confirmed. The admin will review your application.",
+  "application": {
+    "id": 14,
+    "job": 3,
+    "job_title": "Wangari 3-Bedroom Move — South C to Karen",
+    "job_scheduled_date": "2026-05-13",
+    "staff_name": "Joseph Waweru",
+    "status": "applied",
+    "applied_at": "2026-05-05T09:00:00Z"
+  }
+}
+```
+
+**Withdraw:**
+```
+DELETE /api/v1/jobs/3/public-apply/
+{ "email": "staff05@emovers.co.ke" }
+```
+
+All the same business rules apply as the authenticated endpoint (deadline, max applicants, job must be pending, one application per staff per job).
+
+**Public job listing** (`GET /api/v1/jobs/public/`) returns safe fields only — no customer contact details:
+```json
+[
+  {
+    "id": 3,
+    "title": "Wangari 3-Bedroom Move — South C to Karen",
+    "move_size": "three_bedroom",
+    "move_size_display": "3 Bedroom",
+    "pickup_address": "21 South C, Nairobi",
+    "dropoff_address": "45 Karen Road, Nairobi",
+    "estimated_distance_km": "15.00",
+    "scheduled_date": "2026-05-13",
+    "scheduled_time": null,
+    "requested_staff_count": 8,
+    "application_deadline": null,
+    "max_applicants": 20,
+    "applicant_count": 9,
+    "is_open_for_applications": true,
+    "special_instructions": "Antique furniture — do not stack."
+  }
+]
+```
+
+#### 2. Admin workflow for approving availability
+
+The admin flow remains unchanged — the admin views applicants ranked by `recommendation_score` and either:
+
+**Option A — Manual approval (picks best candidates):**
+```
+GET  /api/v1/jobs/<id>/applications/           → see all applicants ranked by score
+POST /api/v1/jobs/<id>/approve-applications/   → approve subset + designate supervisor
+```
+
+**Option B — Auto-allocate by review score:**
+```
+POST /api/v1/jobs/<id>/auto-allocate/
+{ "num_movers": 6, "num_trucks": 1 }
+```
+Auto-allocation selects the top-rated available staff ordered by `recommendation_score DESC`. The highest-scoring candidate becomes the supervisor.
+
+#### 3. JobApplication visible in Django admin
+
+`JobApplication` is now registered in the admin panel:
+- Listed under **Jobs > Job Applications** with status, timestamps, and reviewer
+- Also appears as an inline tab inside each Job's admin detail page
+- Admins can filter by status (`applied`, `approved`, `rejected`, `withdrawn`) and search by job title or staff name
+
+#### 4. Expanded seed data
+
+`python manage.py seed_data` now creates:
+
+| Entity | Before | Now |
+|---|---|---|
+| Staff | 15 | 20 |
+| Customers | 10 | 15 |
+| Trucks | 6 | 8 |
+| Jobs total | 8 | 13 |
+| Pending (no applications) | 2 | 3 |
+| Pending (with applications) | 0 | 3 — ready for admin to approve |
+| Assigned | 2 | 2 |
+| In progress | 1 | 1 |
+| Completed | 2 | 3 — each with invoice, payment, reviews |
+| Cancelled | 0 | 1 |
+
+The 3 "pending with applications" jobs demonstrate the full public-form flow: staff have already submitted availability and the admin can open the applications list and approve.
+
+#### 5. Bug fix — auto-allocate no-op removed
+
+`auto_allocate_job` contained a harmless but misleading `User.objects.filter(...).update()` call with no arguments. It has been removed.
 
 ---
 
@@ -150,9 +272,9 @@ API base URL: **`http://localhost:8000/api/v1/`**
 | Account | Email | Password | Role |
 |---|---|---|---|
 | System admin | `admin@emovers.co.ke` | `Admin1234!` | `mover-admin` |
-| Staff 01–15 | `staff01@emovers.co.ke` … `staff15@emovers.co.ke` | `Staff1234!` | `mover-staff` |
+| Staff 01–20 | `staff01@emovers.co.ke` … `staff20@emovers.co.ke` | `Staff1234!` | `mover-staff` |
 
-The seed command also creates 10 customers, 6 trucks, 8 jobs in various lifecycle stages, invoices, payments, and reviews.
+The seed command creates 20 staff, 15 customers, 8 trucks, and 13 jobs in various lifecycle stages (including 3 jobs pre-loaded with staff availability applications), plus invoices, payments, and reviews.
 
 **Re-seed (wipe and rebuild):**
 ```bash

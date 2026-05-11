@@ -1,9 +1,10 @@
 from rest_framework import generics, filters, status
 from rest_framework.views import APIView
 from rest_framework.response import Response
-from rest_framework.permissions import IsAuthenticated
+from rest_framework.permissions import IsAuthenticated, AllowAny
 from django_filters.rest_framework import DjangoFilterBackend
 from django.shortcuts import get_object_or_404
+from django.contrib.auth import get_user_model
 
 from .filters import JobFilter
 from .models import Job, JobAssignment, JobApplication
@@ -18,6 +19,8 @@ from .serializers import (
     JobStatusSerializer,
     JobApplicationSerializer,
     ApproveApplicationsSerializer,
+    PublicJobListSerializer,
+    PublicApplySerializer,
 )
 from .services import (
     auto_allocate_job,
@@ -32,6 +35,8 @@ from .services import (
     ApplicationError,
 )
 from accounts.permissions import IsMoverAdmin, IsAdminOrStaff, IsMoverStaff
+
+User = get_user_model()
 
 
 class JobListCreateView(generics.ListCreateAPIView):
@@ -464,4 +469,122 @@ class MyApplicationsView(generics.ListAPIView):
         return (
             JobApplication.objects.filter(staff=self.request.user)
             .select_related("job__customer", "reviewed_by")
+        )
+
+
+# ---------------------------------------------------------------------------
+# Public (no-auth) Views — staff availability form
+# ---------------------------------------------------------------------------
+
+class PublicPendingJobsView(generics.ListAPIView):
+    """
+    Public (no auth required): list all PENDING jobs open for applications.
+
+    Staff use this to browse available work and decide where to apply.
+    Returns limited fields — no customer contact details.
+
+    GET /api/v1/jobs/public/
+    """
+    serializer_class = PublicJobListSerializer
+    permission_classes = [AllowAny]
+    filter_backends = [filters.OrderingFilter]
+    ordering_fields = ["scheduled_date"]
+    ordering = ["scheduled_date"]
+
+    def get_queryset(self):
+        return (
+            Job.objects.filter(status=Job.Status.PENDING)
+            .prefetch_related("applications")
+            .order_by("scheduled_date")
+        )
+
+
+class PublicApplyForJobView(APIView):
+    """
+    Public (no auth required): staff apply for or withdraw from a pending job
+    using only their email address — no login needed.
+
+    POST /api/v1/jobs/<pk>/public-apply/
+      Body: { "email": "staff01@emovers.co.ke" }
+      → Creates a JobApplication for the matching staff account.
+
+    DELETE /api/v1/jobs/<pk>/public-apply/
+      Body: { "email": "staff01@emovers.co.ke" }
+      → Withdraws the existing APPLIED application.
+
+    Business rules (same as authenticated flow):
+      - Job must be PENDING
+      - Deadline must not have passed (if set)
+      - max_applicants cap must not be reached
+      - Staff account must be active
+      - Cannot apply twice for the same job
+    """
+    permission_classes = [AllowAny]
+
+    def _get_staff(self, email):
+        try:
+            return User.objects.get(email=email, role=User.Role.STAFF, is_active=True)
+        except User.DoesNotExist:
+            return None
+
+    def post(self, request, pk):
+        job = get_object_or_404(Job, pk=pk)
+        serializer = PublicApplySerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        staff = self._get_staff(serializer.validated_data["email"])
+        if not staff:
+            return Response(
+                {"error": "No active staff account found with that email address."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        try:
+            application = apply_for_job(job=job, staff=staff)
+        except ApplicationError as e:
+            return Response({"error": str(e)}, status=status.HTTP_400_BAD_REQUEST)
+
+        return Response(
+            {
+                "message": "Availability confirmed. The admin will review your application.",
+                "application": {
+                    "id": application.id,
+                    "job": job.id,
+                    "job_title": job.title,
+                    "job_scheduled_date": str(job.scheduled_date),
+                    "staff_name": staff.get_full_name(),
+                    "status": application.status,
+                    "applied_at": application.applied_at,
+                },
+            },
+            status=status.HTTP_201_CREATED,
+        )
+
+    def delete(self, request, pk):
+        job = get_object_or_404(Job, pk=pk)
+        serializer = PublicApplySerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        staff = self._get_staff(serializer.validated_data["email"])
+        if not staff:
+            return Response(
+                {"error": "No active staff account found with that email address."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        try:
+            application = withdraw_application(job=job, staff=staff)
+        except ApplicationError as e:
+            return Response({"error": str(e)}, status=status.HTTP_400_BAD_REQUEST)
+
+        return Response(
+            {
+                "message": "Availability withdrawn successfully.",
+                "application": {
+                    "id": application.id,
+                    "job": job.id,
+                    "job_title": job.title,
+                    "status": application.status,
+                },
+            }
         )

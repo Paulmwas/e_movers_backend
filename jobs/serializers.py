@@ -327,3 +327,56 @@ class ApproveApplicationsSerializer(serializers.Serializer):
                 {"supervisor_id": "Supervisor must be in the approved_staff_ids list."}
             )
         return data
+
+
+# ---------------------------------------------------------------------------
+# Public (unauthenticated) serializers
+# ---------------------------------------------------------------------------
+
+class PublicJobListSerializer(serializers.ModelSerializer):
+    """
+    Limited job info for public (unauthenticated) staff browsing.
+    Exposes only fields staff need to decide whether to apply.
+    """
+    move_size_display = serializers.CharField(source="get_move_size_display", read_only=True)
+    applicant_count = serializers.SerializerMethodField()
+    is_open_for_applications = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Job
+        fields = [
+            "id",
+            "title",
+            "move_size",
+            "move_size_display",
+            "pickup_address",
+            "dropoff_address",
+            "estimated_distance_km",
+            "scheduled_date",
+            "scheduled_time",
+            "requested_staff_count",
+            "application_deadline",
+            "max_applicants",
+            "applicant_count",
+            "is_open_for_applications",
+            "special_instructions",
+        ]
+
+    def get_applicant_count(self, obj):
+        return obj.applications.filter(status="applied").count()
+
+    def get_is_open_for_applications(self, obj):
+        from django.utils import timezone
+        if obj.status != Job.Status.PENDING:
+            return False
+        if obj.application_deadline and timezone.now() > obj.application_deadline:
+            return False
+        active_count = obj.applications.filter(status="applied").count()
+        return active_count < obj.max_applicants
+
+
+class PublicApplySerializer(serializers.Serializer):
+    """Request body for public (unauthenticated) job application or withdrawal."""
+    email = serializers.EmailField(
+        help_text="Your staff email address. Used to identify your account."
+    )

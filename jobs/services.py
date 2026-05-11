@@ -124,7 +124,6 @@ def auto_allocate_job(job: Job, requested_by: User, num_movers: int = 10, num_tr
     ])
 
     # --- Lock resources ---
-    User.objects.filter(pk__in=[s.pk for s in available_staff]).update()
     StaffProfile.objects.filter(
         user__in=available_staff
     ).update(is_available=False)
@@ -406,6 +405,16 @@ def apply_for_job(job: Job, staff: User) -> JobApplication:
 
     if not staff.is_active:
         raise ApplicationError("Your account is deactivated.")
+
+    # Re-use any withdrawn record (unique_together prevents creating a duplicate)
+    existing = job.applications.filter(
+        staff=staff,
+        status=JobApplication.Status.WITHDRAWN,
+    ).first()
+    if existing:
+        existing.status = JobApplication.Status.APPLIED
+        existing.save(update_fields=["status"])
+        return existing
 
     return JobApplication.objects.create(job=job, staff=staff)
 
