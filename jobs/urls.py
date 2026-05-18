@@ -16,6 +16,7 @@ urlpatterns = [
     path("<int:pk>/apply/", views.ApplyForJobView.as_view(), name="job_apply"),
     path("<int:pk>/applications/", views.JobApplicationsListView.as_view(), name="job_applications"),
     path("<int:pk>/approve-applications/", views.ApproveApplicationsView.as_view(), name="job_approve_applications"),
+    path("<int:pk>/team-pdf/", views.JobTeamPDFView.as_view(), name="job_team_pdf"),
     # Public (no auth) application flow
     path("<int:pk>/public-apply/", views.PublicApplyForJobView.as_view(), name="job_public_apply"),
 ]

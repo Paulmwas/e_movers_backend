@@ -33,14 +33,15 @@
 11. [Running Tests](#11-running-tests)
 12. [Database Reset & Re-seed](#12-database-reset--re-seed)
 13. [Deployment Notes](#13-deployment-notes)
+14. [Frontend Integration Guide](#14-frontend-integration-guide)
 
 ---
 
 ## Updates
 
-> **Last updated: 2026-05-05**
+> **Last updated: 2026-05-18**
 
-### What changed
+### What changed — 2026-05-05
 
 #### 1. Public staff availability form (no login required)
 
@@ -157,6 +158,121 @@ The 3 "pending with applications" jobs demonstrate the full public-form flow: st
 
 ---
 
+### What changed — 2026-05-17
+
+#### 1. Attendance confirmation removed (no more PIN)
+
+Staff no longer confirm attendance via PIN. The generate-PIN and confirm-attendance endpoints have been removed. Admins can still view the attendance list for a job and mark staff absent manually.
+
+**Removed endpoints:**
+- ~~`POST /api/v1/attendance/generate-pin/<job_id>/`~~
+- ~~`POST /api/v1/attendance/confirm/`~~
+
+**Remaining attendance endpoints:**
+
+| Method | Endpoint | Access | Description |
+|---|---|---|---|
+| `GET` | `/api/v1/attendance/<job_id>/` | Admin + Staff | View attendance records for a job |
+| `POST` | `/api/v1/attendance/<job_id>/mark-absent/` | Admin | Mark a staff member as absent |
+
+#### 2. PDF download for job team roster
+
+Admins and staff can now download a PDF listing all team members assigned to a move.
+
+```
+GET /api/v1/jobs/<id>/team-pdf/
+Authorization: Bearer <token>
+```
+
+Returns a PDF file (`application/pdf`) with:
+- Job title, customer name, scheduled date and time
+- Pickup and drop-off addresses, job status
+- Numbered team roster (supervisor listed first, then movers)
+
+**Frontend usage:**
+
+```js
+// Trigger a file download in the browser
+const response = await api.get(`/jobs/${jobId}/team-pdf/`, { responseType: 'blob' })
+const url = URL.createObjectURL(response.data)
+const link = document.createElement('a')
+link.href = url
+link.download = `team_${jobId}.pdf`
+link.click()
+URL.revokeObjectURL(url)
+```
+
+Access: Admin (`mover-admin`) and Staff (`mover-staff`). Returns `404` if the job does not exist.
+
+#### 3. SMTP email notifications
+
+Two events now send a real email in addition to the existing in-app notification:
+
+| Trigger | Who receives email | Subject |
+|---|---|---|
+| Admin approves applications (job assigned) | All approved staff | `You're in! — {job title}` |
+| Admin disburses payment | All assigned staff | `Payment Received — {job title}` |
+
+**application_approved email** — styled HTML with blue header:
+- Job title, scheduled date & time, pickup and drop-off addresses
+- Full team member list (pulled from the existing approval notification body)
+
+**payment_disbursed email** — styled HTML with green header:
+- "Your payment of KES X,XXX for '...' has been disbursed."
+- Thank-you closing
+
+Emails are sent via Django's built-in SMTP backend — no new packages required. Configure the SMTP credentials in `.env` (see Deployment Notes). If `EMAIL_HOST_USER` is not set, emails are silently skipped and in-app notifications still work normally.
+
+To print emails to the terminal during local development instead of sending:
+```bash
+# .env (dev only)
+EMAIL_BACKEND=django.core.mail.backends.console.EmailBackend
+```
+
+#### 4. Supervisor review notification on job completion
+
+When a job is marked as **completed**, the supervisor automatically receives a `review_pending` in-app notification listing all movers they must rate. No admin action is needed — the notification fires via signal as soon as the job status transitions to `completed`.
+
+**What the supervisor receives:**
+
+```json
+{
+  "notification_type": "review_pending",
+  "title": "Please review your team — 3-Bedroom Move — Westlands to Karen",
+  "body": "The job '3-Bedroom Move — Westlands to Karen' has been completed. Please submit your performance reviews for the following team members: John Mwangi, Alice Kamau, Peter Njoroge.",
+  "job": 7
+}
+```
+
+**Supervisor review flow:**
+1. Job completes → `review_pending` notification appears in supervisor's inbox
+2. Supervisor fetches team members to review: `GET /api/v1/reviews/job/<id>/` (see who has/hasn't been reviewed)
+3. Supervisor submits reviews: `POST /api/v1/reviews/bulk-create/`
+4. Each mover receives a `review_received` notification
+5. Recommendation scores update immediately
+
+**Frontend — show a "Review your team" prompt when `review_pending` notification is present:**
+```js
+// On the job detail page, check if a pending review notification exists
+const notifications = await api.get('/notifications/?is_read=false')
+const reviewPending = notifications.data.results.find(
+  n => n.notification_type === 'review_pending' && n.job === jobId
+)
+if (reviewPending) {
+  // Show "Rate your team" button / banner
+}
+```
+
+### What changed — 2026-05-18
+
+#### 1. SMTP email configuration finalised
+
+- `DEFAULT_FROM_EMAIL` must equal `EMAIL_HOST_USER` — Gmail rejects messages where the sender doesn't match the authenticated account.
+- Gmail App Passwords must be stored **without spaces** in `.env`. Google displays them as `xxxx xxxx xxxx xxxx` for readability; strip the spaces before pasting: `xxxxxxxxxxxxxxxx`.
+- Email env vars are documented in `.env.example`. Copy them to your real `.env` and fill in your credentials.
+
+---
+
 ## 1. Overview
 
 E-Movers manages the full lifecycle of a moving job:
@@ -167,7 +283,7 @@ E-Movers manages the full lifecycle of a moving job:
 | Application | Staff | Browse pending jobs and apply; admin caps and deadlines enforced |
 | Approval | Admin | Reviews applicants, approves a subset, designates supervisor |
 | Notification | System | Approved staff get team list; rejected staff get a notice |
-| Attendance | Admin + Staff | Admin generates a morning PIN; staff confirm presence with it |
+| Attendance | Admin | Admin marks absent staff manually; no PIN required |
 | Execution | Supervisor | Starts job → completes job |
 | Billing | Admin | Generates invoice → records simulated payment |
 | Disbursement | Admin | Splits collected amount equally among all assigned staff |
@@ -180,11 +296,13 @@ E-Movers manages the full lifecycle of a moving job:
 
 | Layer | Technology |
 |---|---|
-| Framework | Django 4.2 + Django REST Framework 3.15 |
-| Auth | JWT — `djangorestframework-simplejwt` 5.3 |
-| Filtering | `django-filter` 23.5 |
-| CORS | `django-cors-headers` 4.3 |
+| Framework | Django 4.2 + Django REST Framework 3.17 |
+| Auth | JWT — `djangorestframework-simplejwt` 5.5 |
+| Filtering | `django-filter` 25.1 |
+| CORS | `django-cors-headers` 4.9 |
 | Database | SQLite (dev) / PostgreSQL (production) |
+| PDF export | `reportlab` 4.2 |
+| Email | Django built-in SMTP (`django.core.mail`) |
 
 **Install all dependencies:**
 ```bash
@@ -209,8 +327,8 @@ e_movers_backend/
 ├── jobs/                   # Core job lifecycle + application flow
 ├── billing/                # Invoices, simulated payments, disbursements
 ├── reviews/                # Post-job supervisor reviews + score engine
-├── notifications/          # In-app notification inbox
-├── attendance/             # Morning PIN confirmation system
+├── notifications/          # In-app notification inbox + SMTP email dispatch
+├── attendance/             # Attendance records (absent marking; no PIN)
 ├── reports/                # Admin-only aggregated reporting (no DB models)
 │
 ├── integration_tests.py    # 110-test end-to-end suite (run directly)
@@ -341,7 +459,7 @@ POST /api/v1/auth/login/
 | Role | Value | Key capabilities |
 |---|---|---|
 | Mover Admin | `mover-admin` | Full access: create jobs, approve applicants, generate invoices, disburse payments, view all reports |
-| Mover Staff | `mover-staff` | Apply for jobs, confirm attendance, start/complete assigned jobs, submit reviews (supervisor), view own notifications and reviews |
+| Mover Staff | `mover-staff` | Apply for jobs, start/complete assigned jobs, submit reviews (supervisor), view own notifications and reviews |
 
 **Rule of thumb:** Any endpoint documented as "Admin" returns `403 Forbidden` when called by staff.
 
@@ -369,39 +487,36 @@ POST /api/v1/auth/login/
       └─ [SIGNAL] Approved staff notified with full team list
       └─ [SIGNAL] Rejected staff notified politely
 
-5.  Morning of move — Admin generates PIN   POST /api/v1/attendance/generate-pin/<id>/
-      └─ 6-digit PIN stored on the job
+5.  Morning of move — Admin marks no-shows  POST /api/v1/attendance/<id>/mark-absent/
+      └─ AttendanceRecord(status=absent) created for each no-show
 
-6.  Each staff member confirms              POST /api/v1/attendance/confirm/
-      └─ Submits PIN → AttendanceRecord(status=confirmed) created
-      └─ Admin can mark no-shows absent     POST /api/v1/attendance/<id>/mark-absent/
-
-7.  Supervisor starts job            POST /api/v1/jobs/<id>/status/  {"action": "start"}
+6.  Supervisor starts job            POST /api/v1/jobs/<id>/status/  {"action": "start"}
       └─ Job status → "in_progress"
 
-8.  Admin generates invoice          POST /api/v1/billing/invoices/generate/
+7.  Admin generates invoice          POST /api/v1/billing/invoices/generate/
       └─ Costs calculated: base + distance + staff + truck + 16% VAT
 
-9.  Supervisor completes job         POST /api/v1/jobs/<id>/status/  {"action": "complete"}
+8.  Supervisor completes job         POST /api/v1/jobs/<id>/status/  {"action": "complete"}
       └─ Job status → "completed"
       └─ All staff released: is_available = True
       └─ All trucks released: status = "available"
+      └─ [SIGNAL] Supervisor receives review_pending notification with team list
 
-10. Admin records payment            POST /api/v1/billing/invoices/<id>/pay/
+9.  Admin records payment            POST /api/v1/billing/invoices/<id>/pay/
       └─ Simulated payment (cash / M-Pesa / bank / card)
       └─ Partial payments supported; invoice tracks balance_due
 
-11. Admin disburses to staff         POST /api/v1/billing/invoices/<id>/disburse/
+10. Admin disburses to staff         POST /api/v1/billing/invoices/<id>/disburse/
       └─ Invoice must be fully PAID first
       └─ amount_paid split equally among all assigned staff
       └─ One PaymentDisbursement record per staff member
       └─ [NOTIFICATION] Each staff member notified of their payment
 
-12. Supervisor reviews movers        POST /api/v1/reviews/bulk-create/
+11. Supervisor reviews movers        POST /api/v1/reviews/bulk-create/
       └─ Ratings per (job, reviewee, category)
       └─ [SIGNAL] recommendation_score recalculated immediately per mover
 
-13. Next job cycle
+12. Next job cycle
       └─ auto_allocate_job selects staff by recommendation_score DESC
       └─ Best-reviewed staff automatically surface first
 ```
@@ -567,6 +682,7 @@ POST /api/v1/fleet/
 | `POST` | `/api/v1/jobs/<id>/assign-staff/` | Admin | Manually assign specific staff |
 | `POST` | `/api/v1/jobs/<id>/assign-trucks/` | Admin | Manually assign specific trucks |
 | `POST` | `/api/v1/jobs/<id>/status/` | Admin + Staff | Transition job through status machine |
+| `GET` | `/api/v1/jobs/<id>/team-pdf/` | Admin + Staff | Download PDF team roster for a job |
 
 #### Create a job
 
@@ -817,67 +933,12 @@ Supports `?status=applied|approved|rejected|withdrawn`.
 
 ### 8.7 Attendance
 
-PIN-based confirmation system. On the morning of each move, the admin generates a 6-digit PIN and shares it with the team. Staff submit the PIN to confirm their presence.
+Admin-managed attendance records. The admin views the assigned team and marks any no-shows as absent. There is no PIN or staff self-confirmation step.
 
 | Method | Endpoint | Access | Description |
 |---|---|---|---|
-| `POST` | `/api/v1/attendance/generate-pin/<job_id>/` | Admin | Generate the morning attendance PIN for a job |
-| `POST` | `/api/v1/attendance/confirm/` | Staff | Confirm attendance by submitting PIN |
 | `GET` | `/api/v1/attendance/<job_id>/` | Admin + Staff | Full attendance list for a job |
 | `POST` | `/api/v1/attendance/<job_id>/mark-absent/` | Admin | Manually mark a staff member as absent |
-
-#### Generate PIN (morning of move)
-
-```
-POST /api/v1/attendance/generate-pin/7/
-```
-
-No request body required.
-
-**Response `200`:**
-```json
-{
-  "message": "PIN generated for '3-Bedroom Move — Westlands to Karen'. Share it with your team.",
-  "job_id": 7,
-  "pin": "483921"
-}
-```
-
-The PIN is stored on the job. Calling this endpoint again overwrites the previous PIN. Job must be `assigned` or `in_progress`.
-
-#### Staff confirms attendance
-
-```
-POST /api/v1/attendance/confirm/
-```
-
-```json
-{
-  "job_id": 7,
-  "pin": "483921"
-}
-```
-
-**Response `201`:**
-```json
-{
-  "message": "Attendance confirmed. See you on the move!",
-  "record": {
-    "id": 18,
-    "job": 7,
-    "job_title": "3-Bedroom Move — Westlands to Karen",
-    "staff": 5,
-    "staff_name": "John Mwangi",
-    "status": "confirmed",
-    "confirmed_at": "2026-05-20T06:47:00Z"
-  }
-}
-```
-
-**Error cases:**
-- `400` — wrong PIN
-- `400` — staff is not assigned to this job
-- `400` — attendance already recorded
 
 #### View attendance for a job
 
@@ -885,7 +946,7 @@ POST /api/v1/attendance/confirm/
 GET /api/v1/attendance/7/
 ```
 
-Returns all attendance records (confirmed + absent) for the job.
+Returns all attendance records (absent entries) for the job.
 
 #### Mark a staff member absent
 
@@ -906,7 +967,6 @@ Only possible if no attendance record exists yet for that staff member.
 
 | Value | Meaning |
 |---|---|
-| `confirmed` | Staff submitted the correct PIN |
 | `absent` | Marked absent by admin |
 
 ---
@@ -1147,6 +1207,7 @@ GET /api/v1/notifications/?is_read=false
 | `attendance_reminder` | (extensible — send via admin or Celery task) |
 | `payment_disbursed` | Staff member's share has been disbursed |
 | `review_received` | Staff member received a new review |
+| `review_pending` | Supervisor must submit reviews for their team (fires on job completion) |
 | `general` | Admin-generated announcements |
 
 #### Sample notification object
@@ -1157,7 +1218,7 @@ GET /api/v1/notifications/?is_read=false
   "notification_type": "application_approved",
   "type_display": "Application Approved",
   "title": "You're in! — 3-Bedroom Move — Westlands to Karen",
-  "body": "You have been selected for '3-Bedroom Move...' on 2026-05-20.\nYour team: John Mwangi, Alice Kamau, ...\nPlease confirm your attendance on the morning of the move.",
+  "body": "You have been selected for '3-Bedroom Move...' on 2026-05-20.\nYour team: John Mwangi, Alice Kamau, ...",
   "is_read": false,
   "job": 7,
   "job_title": "3-Bedroom Move — Westlands to Karen",
@@ -1388,4 +1449,497 @@ DJANGO_DEBUG=False
 DATABASE_URL=postgres://user:password@host:5432/emovers
 ALLOWED_HOSTS=api.yourdomain.com
 CORS_ALLOWED_ORIGINS=https://app.yourdomain.com
+
+# SMTP email — Gmail example (use an App Password, not your account password)
+# DEFAULT_FROM_EMAIL must match EMAIL_HOST_USER exactly for Gmail to accept it.
+EMAIL_HOST=smtp.gmail.com
+EMAIL_PORT=587
+EMAIL_USE_TLS=True
+EMAIL_HOST_USER=youraddress@gmail.com
+EMAIL_HOST_PASSWORD=xxxxxxxxxxxxxxxx
+DEFAULT_FROM_EMAIL=youraddress@gmail.com
 ```
+
+> **Important:** `DEFAULT_FROM_EMAIL` must be the same Gmail address as `EMAIL_HOST_USER`. Gmail rejects messages where the sender does not match the authenticated account.
+
+#### Gmail App Password setup
+
+Standard Gmail passwords are blocked for third-party SMTP. Generate an **App Password**:
+
+1. `myaccount.google.com` → **Security** → enable **2-Step Verification**
+2. Search **"App passwords"** → App: **Mail** · Device: **Other** → name it `E-Movers`
+3. Google shows the password as `xxxx xxxx xxxx xxxx` (spaces for readability)
+4. **Remove the spaces** before pasting into `.env` — use `xxxxxxxxxxxxxxxx` (16 characters, no separators)
+
+For other providers (SendGrid, Mailgun, Zoho): same env vars — just change `EMAIL_HOST` and use the provider's SMTP credentials.
+
+---
+
+## 14. Frontend Integration Guide
+
+This section covers everything a frontend developer needs to consume the E-Movers API — token management, request setup, role-based routing, and per-screen API call maps.
+
+---
+
+### 14.1 Base URL
+
+```
+Development:  http://localhost:8000/api/v1
+Production:   https://e-movers-backend.onrender.com/api/v1
+```
+
+Store this in an environment variable (e.g. `VITE_API_BASE_URL` or `NEXT_PUBLIC_API_URL`) and never hard-code it.
+
+---
+
+### 14.2 Authentication Flow
+
+#### Step 1 — Login
+
+```
+POST /api/v1/auth/login/
+Body: { "email": "...", "password": "..." }
+```
+
+On success (`200`), you receive:
+
+```json
+{
+  "user": { "id": 1, "email": "...", "role": "mover-admin", ... },
+  "tokens": { "access": "<jwt>", "refresh": "<jwt>" }
+}
+```
+
+Store both tokens and the user object:
+
+```js
+// Suggested storage
+localStorage.setItem('access_token',  data.tokens.access)
+localStorage.setItem('refresh_token', data.tokens.refresh)
+localStorage.setItem('user',          JSON.stringify(data.user))
+```
+
+#### Step 2 — Attach token to every request
+
+Every protected request needs the header:
+
+```
+Authorization: Bearer <access_token>
+```
+
+#### Step 3 — Refresh the access token
+
+The access token expires after **60 minutes**. When any request returns `401`, use the refresh token to get a new one:
+
+```
+POST /api/v1/auth/token/refresh/
+Body: { "refresh": "<refresh_token>" }
+```
+
+Response:
+
+```json
+{ "access": "<new_access_token>", "refresh": "<new_refresh_token>" }
+```
+
+Update both stored tokens. The old refresh token is blacklisted automatically.
+
+#### Step 4 — Logout
+
+```
+POST /api/v1/auth/logout/
+Body: { "refresh": "<refresh_token>" }
+```
+
+Then clear storage and redirect to login:
+
+```js
+localStorage.removeItem('access_token')
+localStorage.removeItem('refresh_token')
+localStorage.removeItem('user')
+```
+
+---
+
+### 14.3 Axios Setup (Recommended)
+
+```js
+// src/lib/api.js
+import axios from 'axios'
+
+const api = axios.create({
+  baseURL: import.meta.env.VITE_API_BASE_URL, // e.g. http://localhost:8000/api/v1
+})
+
+// Attach access token to every request
+api.interceptors.request.use((config) => {
+  const token = localStorage.getItem('access_token')
+  if (token) config.headers.Authorization = `Bearer ${token}`
+  return config
+})
+
+// Auto-refresh on 401
+let isRefreshing = false
+let failedQueue = []
+
+const processQueue = (error, token = null) => {
+  failedQueue.forEach((p) => (error ? p.reject(error) : p.resolve(token)))
+  failedQueue = []
+}
+
+api.interceptors.response.use(
+  (res) => res,
+  async (error) => {
+    const original = error.config
+    if (error.response?.status === 401 && !original._retry) {
+      if (isRefreshing) {
+        return new Promise((resolve, reject) => {
+          failedQueue.push({ resolve, reject })
+        })
+          .then((token) => { original.headers.Authorization = `Bearer ${token}`; return api(original) })
+          .catch((err) => Promise.reject(err))
+      }
+
+      original._retry = true
+      isRefreshing = true
+
+      try {
+        const refresh = localStorage.getItem('refresh_token')
+        const { data } = await axios.post(`${import.meta.env.VITE_API_BASE_URL}/auth/token/refresh/`, { refresh })
+        localStorage.setItem('access_token', data.access)
+        localStorage.setItem('refresh_token', data.refresh)
+        api.defaults.headers.common.Authorization = `Bearer ${data.access}`
+        processQueue(null, data.access)
+        original.headers.Authorization = `Bearer ${data.access}`
+        return api(original)
+      } catch (err) {
+        processQueue(err, null)
+        // Refresh failed — force logout
+        localStorage.clear()
+        window.location.href = '/login'
+        return Promise.reject(err)
+      } finally {
+        isRefreshing = false
+      }
+    }
+    return Promise.reject(error)
+  }
+)
+
+export default api
+```
+
+---
+
+### 14.4 User Roles & Route Protection
+
+There are two roles. Every token payload contains the `role` field. Read it from the stored user object:
+
+```js
+const user = JSON.parse(localStorage.getItem('user'))
+const isAdmin = user?.role === 'mover-admin'
+const isStaff = user?.role === 'mover-staff'
+```
+
+#### Role capabilities summary
+
+| Capability | `mover-admin` | `mover-staff` |
+|---|:---:|:---:|
+| Create / edit jobs | Yes | No |
+| View job list | Yes | Yes |
+| Apply for jobs | No | Yes |
+| View own applications | No | Yes |
+| Approve applications | Yes | No |
+| Auto-allocate | Yes | No |
+| Mark staff absent | Yes | No |
+| Start / complete job | Yes | Yes (supervisor only) |
+| Generate & view invoices | Yes | Yes (read) |
+| Record payments | Yes | No |
+| Disburse payments | Yes | No |
+| Submit reviews | No | Yes (supervisor only) |
+| View review summary | Yes | Yes (own only) |
+| View reports / dashboard | Yes | No |
+| Register new users | Yes | No |
+
+#### Route guard example (React Router v6)
+
+```jsx
+// src/components/RequireRole.jsx
+import { Navigate } from 'react-router-dom'
+
+export default function RequireRole({ role, children }) {
+  const user = JSON.parse(localStorage.getItem('user'))
+  if (!user) return <Navigate to="/login" replace />
+  if (role && user.role !== role) return <Navigate to="/unauthorized" replace />
+  return children
+}
+
+// Usage in router
+<Route path="/reports" element={
+  <RequireRole role="mover-admin"><ReportsPage /></RequireRole>
+} />
+<Route path="/my-applications" element={
+  <RequireRole role="mover-staff"><MyApplicationsPage /></RequireRole>
+} />
+```
+
+---
+
+### 14.5 Suggested Page Structure
+
+```
+/login                      → Public
+/dashboard                  → Admin only
+/jobs                       → Admin + Staff
+/jobs/:id                   → Admin + Staff
+/jobs/new                   → Admin only
+/customers                  → Admin + Staff
+/customers/new              → Admin only
+/fleet                      → Admin + Staff
+/fleet/new                  → Admin only
+/staff                      → Admin only
+/staff/:id                  → Admin only
+/my-applications            → Staff only
+/attendance/:jobId          → Admin + Staff
+/billing/invoices           → Admin + Staff
+/billing/invoices/:id       → Admin + Staff
+/reviews/job/:jobId         → Staff (supervisor) + Admin
+/notifications              → Admin + Staff
+/reports                    → Admin only
+/profile                    → Admin + Staff
+```
+
+---
+
+### 14.6 Screen-by-Screen API Call Map
+
+#### Login Page
+
+| Action | API Call |
+|---|---|
+| Submit login form | `POST /auth/login/` |
+
+Store `tokens.access`, `tokens.refresh`, and `user` from the response. Redirect based on `user.role`:
+- `mover-admin` → `/dashboard`
+- `mover-staff` → `/jobs`
+
+---
+
+#### Admin Dashboard (`/dashboard`)
+
+| Widget | API Call |
+|---|---|
+| KPI cards | `GET /reports/dashboard/` |
+| Jobs needing attention | Use `jobs.unassigned_needing_attention` from dashboard response |
+| Recent jobs | `GET /jobs/?ordering=-created_at&page_size=5` |
+
+---
+
+#### Jobs List (`/jobs`)
+
+| Action | API Call |
+|---|---|
+| Load jobs | `GET /jobs/` |
+| Filter by status | `GET /jobs/?status=pending` |
+| Search | `GET /jobs/?search=Karen` |
+| Filter by date range | `GET /jobs/?scheduled_date_after=2026-05-01&scheduled_date_before=2026-05-31` |
+| Unassigned jobs alert | `GET /jobs/unassigned/` |
+
+Pagination: responses include `count`, `next`, `previous`, `results`.
+
+---
+
+#### Job Detail (`/jobs/:id`)
+
+| Action | API Call | Who |
+|---|---|---|
+| Load job | `GET /jobs/:id/` | Both |
+| View applicants | `GET /jobs/:id/applications/` | Admin |
+| Approve applicants | `POST /jobs/:id/approve-applications/` | Admin |
+| Auto-allocate | `POST /jobs/:id/auto-allocate/` | Admin |
+| Assign staff manually | `POST /jobs/:id/assign-staff/` | Admin |
+| Assign trucks manually | `POST /jobs/:id/assign-trucks/` | Admin |
+| Start job | `POST /jobs/:id/status/ {"action":"start"}` | Admin + Supervisor |
+| Complete job | `POST /jobs/:id/status/ {"action":"complete"}` | Admin + Supervisor |
+| Cancel job | `POST /jobs/:id/status/ {"action":"cancel"}` | Admin |
+| Submit team reviews (after completion) | `POST /reviews/bulk-create/` | Supervisor |
+| Download team PDF | `GET /jobs/:id/team-pdf/` | Both |
+| View attendance | `GET /attendance/:id/` | Both |
+| View invoice | `GET /billing/invoices/?job=:id` | Both |
+
+---
+
+#### Staff — Browse & Apply for Jobs
+
+| Action | API Call |
+|---|---|
+| Browse pending jobs (no login) | `GET /jobs/public/` |
+| Apply for a job (authenticated) | `POST /jobs/:id/apply/` |
+| Withdraw application | `DELETE /jobs/:id/apply/` |
+| My application history | `GET /jobs/my-applications/` |
+
+---
+
+#### Customers (`/customers`)
+
+| Action | API Call |
+|---|---|
+| List | `GET /customers/` |
+| Create | `POST /customers/` |
+| Edit | `PATCH /customers/:id/` |
+| Delete | `DELETE /customers/:id/` |
+
+---
+
+#### Fleet (`/fleet`)
+
+| Action | API Call |
+|---|---|
+| List all trucks | `GET /fleet/` |
+| Available trucks only | `GET /fleet/available/` |
+| Create truck | `POST /fleet/` |
+| Edit truck | `PATCH /fleet/:id/` |
+| Delete truck | `DELETE /fleet/:id/` |
+
+---
+
+#### Staff List (`/staff`) — Admin only
+
+| Action | API Call |
+|---|---|
+| List all staff | `GET /users/?role=mover-staff` |
+| Available staff ranked by score | `GET /users/available-staff/` |
+| View staff profile | `GET /users/:id/staff-profile/` |
+| Update availability/notes | `PATCH /users/:id/staff-profile/` |
+| Deactivate staff | `DELETE /users/:id/` |
+| Register new staff | `POST /auth/register/` |
+
+---
+
+#### Billing — Invoices (`/billing/invoices`)
+
+| Action | API Call |
+|---|---|
+| List invoices | `GET /billing/invoices/` |
+| Generate invoice for a job | `POST /billing/invoices/generate/` |
+| View invoice detail | `GET /billing/invoices/:id/` |
+| Record payment | `POST /billing/invoices/:id/pay/` |
+| Disburse to staff | `POST /billing/invoices/:id/disburse/` |
+
+---
+
+#### Reviews (`/reviews/job/:jobId`) — Supervisor only
+
+| Action | API Call |
+|---|---|
+| Submit all reviews in one shot | `POST /reviews/bulk-create/` |
+| View reviews for a job | `GET /reviews/job/:jobId/` |
+| Staff view own reviews | `GET /reviews/my-reviews/` |
+| Staff performance summary | `GET /reviews/staff/:id/summary/` |
+
+---
+
+#### Notifications
+
+| Action | API Call |
+|---|---|
+| Load inbox | `GET /notifications/` |
+| Unread badge count | `GET /notifications/unread-count/` |
+| Mark one as read | `PATCH /notifications/:id/read/` |
+| Mark all as read | `POST /notifications/mark-all-read/` |
+
+Poll or refresh `/notifications/unread-count/` on page focus to keep the badge up to date.
+
+---
+
+#### Reports (`/reports`) — Admin only
+
+| Report | API Call |
+|---|---|
+| Dashboard KPIs | `GET /reports/dashboard/` |
+| Job analytics | `GET /reports/jobs/?days=30` |
+| Billing & revenue | `GET /reports/billing/?days=30` |
+| Staff performance ranking | `GET /reports/staff-performance/` |
+| Fleet utilisation | `GET /reports/fleet/` |
+| Attendance rates | `GET /reports/attendance/?days=30` |
+| Application volume | `GET /reports/applications/?days=30` |
+
+---
+
+#### Profile (`/profile`)
+
+| Action | API Call |
+|---|---|
+| Load own profile | `GET /auth/me/` |
+| Update name / phone | `PATCH /auth/me/` |
+| Change password | `POST /auth/change-password/` with `{ old_password, new_password }` |
+
+---
+
+### 14.7 Error Handling
+
+All API errors return either:
+
+```json
+{ "error": "Human-readable message." }
+```
+
+or DRF field-level validation errors:
+
+```json
+{ "field_name": ["This field is required."] }
+```
+
+Recommended centralised error handler:
+
+```js
+// src/lib/handleApiError.js
+export function getErrorMessage(err) {
+  const data = err.response?.data
+  if (!data) return 'Network error. Please try again.'
+  if (typeof data === 'string') return data
+  if (data.error) return data.error
+  if (data.detail) return data.detail
+  // Field-level errors — join all messages
+  return Object.values(data).flat().join(' ')
+}
+```
+
+#### Common HTTP status codes
+
+| Status | Meaning | Frontend action |
+|---|---|---|
+| `200` / `201` | Success | Show success state / navigate |
+| `400` | Validation or business rule error | Show `error` or field messages |
+| `401` | Token expired or missing | Interceptor auto-refreshes; if refresh fails → redirect to `/login` |
+| `403` | Wrong role | Show "Access denied" or hide the UI element |
+| `404` | Resource not found | Show not-found state |
+| `207` | Bulk operation partial success | Show per-item results from `created` and `errors` arrays |
+
+---
+
+### 14.8 Pagination
+
+List endpoints return paginated results:
+
+```json
+{
+  "count": 47,
+  "next": "http://localhost:8000/api/v1/jobs/?page=2",
+  "previous": null,
+  "results": [ ... ]
+}
+```
+
+Use the `next` / `previous` URLs directly, or append `?page=N` manually. Default page size is 20.
+
+---
+
+### 14.9 Dev Credentials (Seed Data)
+
+Run `python manage.py seed_data` on the backend, then use:
+
+| Role | Email | Password |
+|---|---|---|
+| Admin | `admin@emovers.co.ke` | `Admin1234!` |
+| Staff (any of 20) | `staff01@emovers.co.ke` … `staff20@emovers.co.ke` | `Staff1234!` |

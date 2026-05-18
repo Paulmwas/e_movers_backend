@@ -1,0 +1,12 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(xargs grep -l \"attendance_pin\")",
+      "Read(//c/Users/PC/Downloads/e_movers_backend/**)",
+      "Bash(requirements\")",
+      "PowerShell(\\(Get-Content -Path \"c:\\\\Users\\\\PC\\\\Downloads\\\\e_movers_backend\\\\e_movers_backend\\\\requirements.txt\" -Raw\\) -replace ' ', '' | ForEach-Object { $_ })",
+      "PowerShell(\\(Get-Content -Path \"c:\\\\Users\\\\PC\\\\Downloads\\\\e_movers_backend\\\\e_movers_backend\\\\e_movers\\\\settings.py\" | Measure-Object -Line\\).Lines)",
+      "Bash(c:/Users/PC/Downloads/e_movers_backend/e_movers_backend/venv/Scripts/pip.exe list *)"
+    ]
+  }
+}

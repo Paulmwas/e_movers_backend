@@ -11,6 +11,7 @@ Supported notification types:
   attendance_reminder   — Reminder to confirm attendance
   payment_disbursed     — Staff member's payment has been disbursed
   review_received       — Staff received a new review
+  review_pending        — Supervisor must submit reviews for their team
   general               — Administrative messages
 """
 
@@ -26,6 +27,7 @@ class Notification(models.Model):
         ATTENDANCE_REMINDER = "attendance_reminder", "Attendance Reminder"
         PAYMENT_DISBURSED = "payment_disbursed", "Payment Disbursed"
         REVIEW_RECEIVED = "review_received", "Review Received"
+        REVIEW_PENDING = "review_pending", "Review Pending"
         GENERAL = "general", "General"
 
     recipient = models.ForeignKey(

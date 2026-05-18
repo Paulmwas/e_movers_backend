@@ -1,7 +1,7 @@
 """
 attendance/views.py
 ===================
-Attendance confirmation and management endpoints.
+Attendance management endpoints.
 """
 
 from rest_framework import generics, status
@@ -11,85 +11,10 @@ from rest_framework.permissions import IsAuthenticated
 from django.shortcuts import get_object_or_404
 
 from .models import AttendanceRecord
-from .serializers import (
-    AttendanceRecordSerializer,
-    ConfirmAttendanceSerializer,
-    MarkAbsentSerializer,
-)
-from .services import confirm_attendance, mark_absent, generate_attendance_pin, AttendanceError
+from .serializers import AttendanceRecordSerializer, MarkAbsentSerializer
+from .services import mark_absent, AttendanceError
 from jobs.models import Job
-from accounts.permissions import IsMoverAdmin, IsMoverStaff, IsAdminOrStaff
-
-
-class ConfirmAttendanceView(APIView):
-    """
-    Staff only: confirm attendance by submitting the morning PIN.
-
-    POST /api/v1/attendance/confirm/
-
-    Request body:
-      {
-        "job_id": 1,
-        "pin": "483921"
-      }
-
-    Creates an AttendanceRecord with status=CONFIRMED.
-    """
-    permission_classes = [IsAuthenticated, IsMoverStaff]
-
-    def post(self, request):
-        serializer = ConfirmAttendanceSerializer(data=request.data)
-        serializer.is_valid(raise_exception=True)
-
-        job = get_object_or_404(Job, pk=serializer.validated_data["job_id"])
-
-        try:
-            record = confirm_attendance(
-                job=job,
-                staff=request.user,
-                token=serializer.validated_data["pin"],
-            )
-        except AttendanceError as e:
-            return Response({"error": str(e)}, status=status.HTTP_400_BAD_REQUEST)
-
-        return Response(
-            {
-                "message": "Attendance confirmed. See you on the move!",
-                "record": AttendanceRecordSerializer(record).data,
-            },
-            status=status.HTTP_201_CREATED,
-        )
-
-
-class GeneratePinView(APIView):
-    """
-    Admin only: generate a 6-digit attendance PIN for a job.
-    Should be done on the morning of the move.
-
-    POST /api/v1/attendance/generate-pin/<job_id>/
-
-    No request body required.
-
-    Response:
-      { "pin": "483921", "job_id": 1, "message": "..." }
-    """
-    permission_classes = [IsAuthenticated, IsMoverAdmin]
-
-    def post(self, request, job_id):
-        job = get_object_or_404(Job, pk=job_id)
-
-        try:
-            pin = generate_attendance_pin(job=job)
-        except AttendanceError as e:
-            return Response({"error": str(e)}, status=status.HTTP_400_BAD_REQUEST)
-
-        return Response(
-            {
-                "message": f"PIN generated for '{job.title}'. Share it with your team.",
-                "job_id": job.pk,
-                "pin": pin,
-            }
-        )
+from accounts.permissions import IsMoverAdmin, IsAdminOrStaff
 
 
 class JobAttendanceListView(generics.ListAPIView):

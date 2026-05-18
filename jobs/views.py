@@ -1,3 +1,4 @@
+import io
 from rest_framework import generics, filters, status
 from rest_framework.views import APIView
 from rest_framework.response import Response
@@ -5,6 +6,13 @@ from rest_framework.permissions import IsAuthenticated, AllowAny
 from django_filters.rest_framework import DjangoFilterBackend
 from django.shortcuts import get_object_or_404
 from django.contrib.auth import get_user_model
+from django.http import FileResponse
+from reportlab.lib.pagesizes import A4
+from reportlab.lib.units import cm
+from reportlab.lib import colors
+from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
+from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+from reportlab.lib.enums import TA_CENTER
 
 from .filters import JobFilter
 from .models import Job, JobAssignment, JobApplication
@@ -470,6 +478,103 @@ class MyApplicationsView(generics.ListAPIView):
             JobApplication.objects.filter(staff=self.request.user)
             .select_related("job__customer", "reviewed_by")
         )
+
+
+# ---------------------------------------------------------------------------
+# PDF Export
+# ---------------------------------------------------------------------------
+
+class JobTeamPDFView(APIView):
+    """
+    Admin & Staff: download a PDF listing all team members assigned to a job.
+
+    GET /api/v1/jobs/<pk>/team-pdf/
+
+    Returns a PDF file with the job details and the full team roster
+    (supervisor first, then movers alphabetically).
+    """
+    permission_classes = [IsAuthenticated, IsAdminOrStaff]
+
+    def get(self, request, pk):
+        job = get_object_or_404(
+            Job.objects.select_related("customer")
+            .prefetch_related("assignments__staff"),
+            pk=pk,
+        )
+
+        assignments = list(job.assignments.select_related("staff").order_by("role", "staff__first_name"))
+
+        buffer = io.BytesIO()
+        doc = SimpleDocTemplate(
+            buffer,
+            pagesize=A4,
+            rightMargin=2 * cm,
+            leftMargin=2 * cm,
+            topMargin=2 * cm,
+            bottomMargin=2 * cm,
+        )
+
+        styles = getSampleStyleSheet()
+        title_style = ParagraphStyle("title", parent=styles["Title"], fontSize=16, spaceAfter=6)
+        heading_style = ParagraphStyle("heading", parent=styles["Heading2"], fontSize=12, spaceAfter=4)
+        normal_style = styles["Normal"]
+
+        elements = []
+
+        elements.append(Paragraph("E-Movers — Team Assignment Sheet", title_style))
+        elements.append(Spacer(1, 0.3 * cm))
+
+        info_data = [
+            ["Job", job.title],
+            ["Customer", job.customer.get_full_name()],
+            ["Date", str(job.scheduled_date)],
+            ["Time", str(job.scheduled_time) if job.scheduled_time else "TBD"],
+            ["Pickup", job.pickup_address],
+            ["Drop-off", job.dropoff_address],
+            ["Status", job.get_status_display()],
+        ]
+
+        info_table = Table(info_data, colWidths=[4 * cm, 13 * cm])
+        info_table.setStyle(TableStyle([
+            ("FONTNAME", (0, 0), (0, -1), "Helvetica-Bold"),
+            ("FONTNAME", (1, 0), (1, -1), "Helvetica"),
+            ("FONTSIZE", (0, 0), (-1, -1), 10),
+            ("TOPPADDING", (0, 0), (-1, -1), 3),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
+            ("VALIGN", (0, 0), (-1, -1), "TOP"),
+        ]))
+        elements.append(info_table)
+        elements.append(Spacer(1, 0.5 * cm))
+
+        elements.append(Paragraph(f"Team Members ({len(assignments)})", heading_style))
+
+        team_data = [["#", "Name", "Role"]]
+        for i, assignment in enumerate(assignments, start=1):
+            team_data.append([
+                str(i),
+                assignment.staff.get_full_name(),
+                assignment.get_role_display(),
+            ])
+
+        team_table = Table(team_data, colWidths=[1.5 * cm, 11 * cm, 4.5 * cm])
+        team_table.setStyle(TableStyle([
+            ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#1a56db")),
+            ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+            ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+            ("FONTSIZE", (0, 0), (-1, -1), 10),
+            ("TOPPADDING", (0, 0), (-1, -1), 5),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
+            ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#f3f4f6")]),
+            ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#d1d5db")),
+            ("ALIGN", (0, 0), (0, -1), "CENTER"),
+        ]))
+        elements.append(team_table)
+
+        doc.build(elements)
+        buffer.seek(0)
+
+        filename = f"team_{job.pk}_{job.scheduled_date}.pdf"
+        return FileResponse(buffer, as_attachment=True, filename=filename, content_type="application/pdf")
 
 
 # ---------------------------------------------------------------------------

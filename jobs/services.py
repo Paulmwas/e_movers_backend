@@ -319,6 +319,12 @@ def transition_job_status(job: Job, new_status: str, requested_by: User):
 
     job.status = new_status
     job.save(update_fields=["status", "started_at", "completed_at", "updated_at"])
+
+    # Notify supervisor to submit reviews when job is completed
+    if new_status == Job.Status.COMPLETED:
+        from jobs.signals import job_completed as job_completed_signal
+        job_completed_signal.send(sender=job.__class__, job=job)
+
     return job
 
 
