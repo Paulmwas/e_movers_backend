@@ -1,6 +1,7 @@
 from rest_framework import serializers
 from decimal import Decimal
 from .models import Invoice, Payment, PaymentDisbursement
+from jobs.models import Job
 
 
 class PaymentSerializer(serializers.ModelSerializer):
@@ -62,6 +63,7 @@ class InvoiceSerializer(serializers.ModelSerializer):
             "total_amount",
             "amount_paid",
             "balance_due",
+            "company_profit",
             "payment_status",
             "payment_status_display",
             "due_date",
@@ -84,6 +86,7 @@ class InvoiceSerializer(serializers.ModelSerializer):
             "total_amount",
             "amount_paid",
             "balance_due",
+            "company_profit",
             "payment_status",
             "created_by",
             "created_at",
@@ -184,3 +187,9 @@ class PaymentDisbursementSerializer(serializers.ModelSerializer):
 
     def get_disbursed_by_name(self, obj):
         return obj.disbursed_by.get_full_name() if obj.disbursed_by else None
+
+
+class QuoteRequestSerializer(serializers.Serializer):
+    """Request body for POST /billing/quote/ (public, no auth)."""
+    move_size = serializers.ChoiceField(choices=Job.MoveSizeCategory.choices)
+    estimated_distance_km = serializers.DecimalField(max_digits=8, decimal_places=2, min_value=Decimal("0"))

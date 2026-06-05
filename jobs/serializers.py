@@ -51,6 +51,7 @@ class JobTruckSerializer(serializers.ModelSerializer):
     capacity_tons = serializers.DecimalField(
         source="truck.capacity_tons", max_digits=5, decimal_places=2, read_only=True
     )
+    allocation_method_display = serializers.CharField(source="get_allocation_method_display", read_only=True)
 
     class Meta:
         model = JobTruck
@@ -62,6 +63,8 @@ class JobTruckSerializer(serializers.ModelSerializer):
             "make",
             "model",
             "capacity_tons",
+            "allocation_method",
+            "allocation_method_display",
             "assigned_at",
         ]
 
@@ -212,9 +215,14 @@ class JobUpdateSerializer(serializers.ModelSerializer):
 # ---------------------------------------------------------------------------
 
 class AutoAllocateSerializer(serializers.Serializer):
-    """Request body for POST /jobs/<pk>/auto-allocate/"""
-    num_movers = serializers.IntegerField(min_value=1, max_value=50, default=10)
-    num_trucks = serializers.IntegerField(min_value=1, max_value=10, default=1)
+    """Request body for POST /jobs/<pk>/auto-allocate/ — all fields optional."""
+    num_movers = serializers.IntegerField(min_value=1, max_value=50, required=False, allow_null=True, default=None)
+    num_trucks = serializers.IntegerField(min_value=1, max_value=10, required=False, allow_null=True, default=None)
+
+
+class ChangeTeamLeaderSerializer(serializers.Serializer):
+    """Request body for PATCH /jobs/<pk>/change-supervisor/"""
+    staff_id = serializers.IntegerField(help_text="User PK of the new supervisor. Must already be assigned to the job as a mover.")
 
 
 class AssignStaffSerializer(serializers.Serializer):

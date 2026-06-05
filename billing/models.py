@@ -31,6 +31,7 @@ class Invoice(models.Model):
     total_amount = models.DecimalField(max_digits=10, decimal_places=2, default=0)
     amount_paid = models.DecimalField(max_digits=10, decimal_places=2, default=0)
     balance_due = models.DecimalField(max_digits=10, decimal_places=2, default=0)
+    company_profit = models.DecimalField(max_digits=10, decimal_places=2, default=0)
 
     payment_status = models.CharField(
         max_length=10,

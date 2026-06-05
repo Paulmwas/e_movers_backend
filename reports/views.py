@@ -27,12 +27,17 @@ from reviews.models import StaffReview
 User = get_user_model()
 
 
-def _parse_days(request, default=30) -> int:
-    """Parse ?days=N query param, clamp to 1–365."""
+def _parse_days(request, default=365) -> int:
+    """Parse ?days=N query param, clamp to 1–3650. Pass ?all=true to skip date filtering."""
     try:
-        return max(1, min(int(request.query_params.get("days", default)), 365))
+        return max(1, min(int(request.query_params.get("days", default)), 3650))
     except (ValueError, TypeError):
         return default
+
+
+def _all_time(request) -> bool:
+    """Return True when ?all=true is present — bypasses date window."""
+    return request.query_params.get("all", "").lower() == "true"
 
 
 class DashboardSummaryView(APIView):
@@ -143,7 +148,7 @@ class JobReportView(APIView):
     def get(self, request):
         days = _parse_days(request)
         since = date.today() - timedelta(days=days)
-        jobs = Job.objects.filter(created_at__date__gte=since)
+        jobs = Job.objects.all() if _all_time(request) else Job.objects.filter(created_at__date__gte=since)
 
         # Status breakdown
         status_breakdown = list(
@@ -225,17 +230,22 @@ class BillingReportView(APIView):
         days = _parse_days(request)
         since = date.today() - timedelta(days=days)
 
-        invoices = Invoice.objects.filter(created_at__date__gte=since)
-        payments = Payment.objects.filter(
-            payment_date__date__gte=since,
-            status=Payment.Status.COMPLETED,
-        )
+        if _all_time(request):
+            invoices = Invoice.objects.all()
+            payments = Payment.objects.filter(status=Payment.Status.COMPLETED)
+        else:
+            invoices = Invoice.objects.filter(created_at__date__gte=since)
+            payments = Payment.objects.filter(
+                payment_date__date__gte=since,
+                status=Payment.Status.COMPLETED,
+            )
 
         # Revenue totals
         revenue_totals = invoices.aggregate(
             total_invoiced=Sum("total_amount"),
             total_collected=Sum("amount_paid"),
             total_outstanding=Sum("balance_due"),
+            total_company_profit=Sum("company_profit"),
         )
 
         # Payment method breakdown
@@ -294,6 +304,7 @@ class BillingReportView(APIView):
                 "total_invoiced": revenue_totals["total_invoiced"] or Decimal("0.00"),
                 "total_collected": revenue_totals["total_collected"] or Decimal("0.00"),
                 "total_outstanding": revenue_totals["total_outstanding"] or Decimal("0.00"),
+                "total_company_profit": revenue_totals["total_company_profit"] or Decimal("0.00"),
             },
             "payment_method_breakdown": method_breakdown,
             "monthly_revenue_trend": monthly_trend,
@@ -505,7 +516,7 @@ class ApplicationsReportView(APIView):
         days = _parse_days(request)
         since = date.today() - timedelta(days=days)
 
-        applications = JobApplication.objects.filter(applied_at__date__gte=since)
+        applications = JobApplication.objects.all() if _all_time(request) else JobApplication.objects.filter(applied_at__date__gte=since)
 
         total = applications.count()
         status_breakdown = list(

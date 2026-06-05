@@ -9,6 +9,7 @@ urlpatterns = [
     path("public/", views.PublicPendingJobsView.as_view(), name="public_jobs"),
     path("<int:pk>/", views.JobDetailView.as_view(), name="job_detail"),
     path("<int:pk>/auto-allocate/", views.AutoAllocateView.as_view(), name="job_auto_allocate"),
+    path("<int:pk>/change-supervisor/", views.ChangeTeamLeaderView.as_view(), name="job_change_supervisor"),
     path("<int:pk>/assign-staff/", views.AssignStaffView.as_view(), name="job_assign_staff"),
     path("<int:pk>/assign-trucks/", views.AssignTrucksView.as_view(), name="job_assign_trucks"),
     path("<int:pk>/status/", views.JobStatusTransitionView.as_view(), name="job_status"),

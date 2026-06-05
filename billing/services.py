@@ -3,14 +3,25 @@ billing/services.py
 ===================
 All billing business logic in one place.
 
-Cost formula (all amounts in KES):
-  base_charge      = 2,000
-  distance_charge  = 100 × estimated_distance_km
-  staff_charge     = 500 × assigned_staff_count
-  truck_charge     = 1,500 × assigned_truck_count
-  subtotal         = sum of above
-  tax_amount       = subtotal × 16%
-  total_amount     = subtotal + tax_amount
+Pricing model (all amounts in KES):
+  Bedroom jobs (1–6 bedrooms):
+    bedroom_charge = lookup from BEDROOM_PRICES table
+    distance_charge = lookup from DISTANCE_BRACKETS table
+    total_amount = bedroom_charge + distance_charge  (no tax for bedroom moves)
+
+  Non-bedroom jobs (studio, office_small, office_large) — legacy formula:
+    base_charge      = 2,000
+    distance_charge  = 100 × estimated_distance_km
+    staff_charge     = 500 × assigned_staff_count
+    truck_charge     = 1,500 × assigned_truck_count
+    subtotal         = sum of above
+    tax_amount       = subtotal × 16%
+    total_amount     = subtotal + tax_amount
+
+Disbursement model:
+  Each assigned staff member receives a flat KES 500.
+  Remainder (amount_paid − 500 × staff_count) is recorded as company_profit
+  on the Invoice and surfaced in billing reports.
 
 Simulated payment:
   Generates a fake transaction_id (SIM-<timestamp>-<random>),
@@ -28,14 +39,43 @@ from jobs.models import Job
 
 
 # ---------------------------------------------------------------------------
-# Pricing constants — change these to update all quotes project-wide
+# Bedroom-based pricing tables (KES)
 # ---------------------------------------------------------------------------
 
-BASE_CHARGE = Decimal("2000.00")
-RATE_PER_KM = Decimal("100.00")
-RATE_PER_STAFF = Decimal("500.00")
-RATE_PER_TRUCK = Decimal("1500.00")
-TAX_RATE = Decimal("0.1600")
+BEDROOM_PRICES = {
+    "one_bedroom":   Decimal("10000.00"),
+    "two_bedroom":   Decimal("14000.00"),
+    "three_bedroom": Decimal("20000.00"),
+    "four_bedroom":  Decimal("24000.00"),
+    "five_bedroom":  Decimal("28000.00"),
+    "six_bedroom":   Decimal("32000.00"),
+}
+
+# Distance brackets: (max_km_exclusive, price)  — last entry is the cap
+DISTANCE_BRACKETS = [
+    (10,  Decimal("3000.00")),
+    (20,  Decimal("6000.00")),
+    (30,  Decimal("9000.00")),
+    (40,  Decimal("12000.00")),
+    (None, Decimal("12000.00")),  # >40 km — cap at 12,000
+]
+
+# Legacy pricing constants used for non-bedroom move sizes
+LEGACY_BASE_CHARGE = Decimal("2000.00")
+LEGACY_RATE_PER_KM = Decimal("100.00")
+LEGACY_RATE_PER_STAFF = Decimal("500.00")
+LEGACY_RATE_PER_TRUCK = Decimal("1500.00")
+LEGACY_TAX_RATE = Decimal("0.1600")
+
+STAFF_DISBURSEMENT_FLAT = Decimal("500.00")
+
+
+def _distance_charge(distance_km: Decimal) -> Decimal:
+    km = float(distance_km)
+    for max_km, price in DISTANCE_BRACKETS:
+        if max_km is None or km < max_km:
+            return price
+    return DISTANCE_BRACKETS[-1][1]
 
 
 class BillingError(Exception):
@@ -51,6 +91,9 @@ def generate_invoice(job: Job, created_by, due_date=None, notes: str = "") -> In
     """
     Calculate costs for a job and create (or update) its invoice.
 
+    For 1–6 bedroom jobs: bedroom price + distance bracket (no tax).
+    For studio/office moves: legacy formula with tax.
+
     Can be called:
       - After job creation (generates a quote)
       - After job completion (confirms final amounts)
@@ -65,24 +108,38 @@ def generate_invoice(job: Job, created_by, due_date=None, notes: str = "") -> In
                 "It cannot be regenerated."
             )
 
-    staff_count = job.assignments.count()
-    truck_count = job.job_trucks.count()
+    distance_km = Decimal(str(job.estimated_distance_km))
 
-    base_charge = BASE_CHARGE
-    distance_charge = RATE_PER_KM * Decimal(str(job.estimated_distance_km))
-    staff_charge = RATE_PER_STAFF * staff_count
-    truck_charge = RATE_PER_TRUCK * truck_count
-    subtotal = base_charge + distance_charge + staff_charge + truck_charge
-    tax_amount = (subtotal * TAX_RATE).quantize(Decimal("0.01"))
-    total_amount = subtotal + tax_amount
+    if job.move_size in BEDROOM_PRICES:
+        # Bedroom move — new pricing model
+        base_charge = BEDROOM_PRICES[job.move_size]
+        dist_charge = _distance_charge(distance_km)
+        staff_charge = Decimal("0.00")
+        truck_charge = Decimal("0.00")
+        subtotal = base_charge + dist_charge
+        tax_rate = Decimal("0.00")
+        tax_amount = Decimal("0.00")
+        total_amount = subtotal
+    else:
+        # Studio / office — legacy formula
+        staff_count = job.assignments.count()
+        truck_count = job.job_trucks.count()
+        base_charge = LEGACY_BASE_CHARGE
+        dist_charge = LEGACY_RATE_PER_KM * distance_km
+        staff_charge = LEGACY_RATE_PER_STAFF * staff_count
+        truck_charge = LEGACY_RATE_PER_TRUCK * truck_count
+        subtotal = base_charge + dist_charge + staff_charge + truck_charge
+        tax_rate = LEGACY_TAX_RATE
+        tax_amount = (subtotal * tax_rate).quantize(Decimal("0.01"))
+        total_amount = subtotal + tax_amount
 
     invoice_data = {
         "base_charge": base_charge,
-        "distance_charge": distance_charge,
+        "distance_charge": dist_charge,
         "staff_charge": staff_charge,
         "truck_charge": truck_charge,
         "subtotal": subtotal,
-        "tax_rate": TAX_RATE,
+        "tax_rate": tax_rate,
         "tax_amount": tax_amount,
         "total_amount": total_amount,
         "balance_due": total_amount,
@@ -93,10 +150,8 @@ def generate_invoice(job: Job, created_by, due_date=None, notes: str = "") -> In
     }
 
     if hasattr(job, "invoice"):
-        # Update existing unpaid/partial invoice
         for field, value in invoice_data.items():
             setattr(job.invoice, field, value)
-        # Keep amount_paid as-is, recalculate balance
         job.invoice.balance_due = max(
             total_amount - job.invoice.amount_paid, Decimal("0.00")
         )
@@ -186,29 +241,26 @@ def _generate_transaction_id(method: str) -> str:
 @transaction.atomic
 def disburse_payment(invoice: Invoice, disbursed_by) -> list:
     """
-    Simulate disbursing the collected invoice amount equally to each
-    assigned staff member on the job.
+    Disburse a flat KES 500 to each assigned staff member.
+    The remainder (amount_paid − 500 × staff_count) is recorded as
+    company_profit on the invoice.
 
     Rules:
       - Invoice must have payment_status=PAID.
-      - Disbursement is idempotent: raises BillingError if any
-        PaymentDisbursement records already exist for this invoice.
-      - The amount is split equally among all assigned staff.
+      - Disbursement is idempotent: raises BillingError if already done.
 
     Parameters
     ----------
     invoice : Invoice
     disbursed_by : User
-        The admin triggering the disbursement.
 
     Returns
     -------
-    list[PaymentDisbursement]
+    QuerySet[PaymentDisbursement]
 
     Raises
     ------
     BillingError
-        When pre-conditions are not met.
     """
     if invoice.payment_status != Invoice.PaymentStatus.PAID:
         raise BillingError(
@@ -231,7 +283,9 @@ def disburse_payment(invoice: Invoice, disbursed_by) -> list:
         )
 
     staff_count = len(staff_list)
-    per_person = (invoice.amount_paid / staff_count).quantize(Decimal("0.01"))
+    per_person = STAFF_DISBURSEMENT_FLAT
+    total_staff_payout = per_person * staff_count
+    company_profit = max(invoice.amount_paid - total_staff_payout, Decimal("0.00"))
 
     ts = int(timezone.now().timestamp())
     disbursements = []
@@ -250,6 +304,10 @@ def disburse_payment(invoice: Invoice, disbursed_by) -> list:
         )
 
     PaymentDisbursement.objects.bulk_create(disbursements)
+
+    # Record company profit on the invoice
+    invoice.company_profit = company_profit
+    invoice.save(update_fields=["company_profit", "updated_at"])
 
     # Send notification to each staff member
     try:

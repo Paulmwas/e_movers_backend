@@ -29,6 +29,9 @@ class Job(models.Model):
         ONE_BED = "one_bedroom", "1 Bedroom"
         TWO_BED = "two_bedroom", "2 Bedroom"
         THREE_BED = "three_bedroom", "3 Bedroom"
+        FOUR_BED = "four_bedroom", "4 Bedroom"
+        FIVE_BED = "five_bedroom", "5 Bedroom"
+        SIX_BED = "six_bedroom", "6 Bedroom"
         OFFICE_SMALL = "office_small", "Small Office"
         OFFICE_LARGE = "office_large", "Large Office"
 
@@ -162,8 +165,18 @@ class JobAssignment(models.Model):
 
 class JobTruck(models.Model):
     """Links a truck to a job."""
+
+    class AllocationMethod(models.TextChoices):
+        AUTO = "auto", "Auto"
+        MANUAL = "manual", "Manual"
+
     job = models.ForeignKey(Job, on_delete=models.CASCADE, related_name="job_trucks")
     truck = models.ForeignKey(Truck, on_delete=models.PROTECT, related_name="job_trucks")
+    allocation_method = models.CharField(
+        max_length=10,
+        choices=AllocationMethod.choices,
+        default=AllocationMethod.MANUAL,
+    )
     assigned_at = models.DateTimeField(auto_now_add=True)
     assigned_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,

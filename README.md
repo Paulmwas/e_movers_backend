@@ -1,6 +1,6 @@
-# E-Movers Backend API
+# Smartmovers Backend API
 
-> **Django REST Framework** backend for the E-Movers moving company management system.
+> **Django REST Framework** backend for the Smartmovers moving company management system.
 > Internal operational tool for admins and mover staff — not a customer-facing booking platform.
 
 ---
@@ -39,7 +39,284 @@
 
 ## Updates
 
-> **Last updated: 2026-05-18**
+> **Last updated: 2026-06-05**
+
+### What changed — 2026-06-05
+
+#### 1. Product renamed to **Smartmovers**
+
+All user-facing documents (quote PDFs, emails, notifications) now use the brand name **Smartmovers**. Internal code paths and repo names are unchanged.
+
+---
+
+#### 2. Auto-allocation no longer hardcodes 11 staff
+
+**Before:** Auto-allocate always assigned 10 movers + 1 supervisor = **11 staff**, regardless of the job's `requested_staff_count`.
+
+**Now:** Auto-allocate reads `job.requested_staff_count` and `job.requested_truck_count` as defaults. The override body fields are now **optional**:
+
+```
+POST /api/v1/jobs/<id>/auto-allocate/
+```
+
+```json
+{}
+```
+_No body needed — uses the job's own requirements._
+
+Or override explicitly:
+```json
+{ "num_movers": 3, "num_trucks": 1 }
+```
+
+`num_movers` = number of movers **excluding the supervisor**. Total staff assigned = `num_movers + 1`.
+
+**Frontend action:** If you were sending `{ "num_movers": 10, "num_trucks": 1 }` unconditionally, stop doing that. Send an empty body `{}` or omit the fields to let the job drive the count.
+
+---
+
+#### 3. New endpoint — Change Team Leader
+
+Admin can now swap the supervisor on any ASSIGNED or IN_PROGRESS job. The target staff member must already be assigned as a mover on that job — it is a role swap, not a fresh assignment.
+
+```
+PATCH /api/v1/jobs/<id>/change-supervisor/
+Authorization: Bearer <admin_token>
+Content-Type: application/json
+
+{ "staff_id": 7 }
+```
+
+**Response `200`:**
+```json
+{
+  "message": "Team leader updated successfully.",
+  "job": { ... }
+}
+```
+
+**Error cases:**
+- `400` — job is not ASSIGNED or IN_PROGRESS
+- `400` — target staff is already the supervisor
+- `400` — target staff is not assigned to this job as a mover
+
+---
+
+#### 4. Truck assignments now include `allocation_method`
+
+The truck objects inside `job.trucks` now carry two new fields:
+
+```json
+{
+  "id": 3,
+  "truck": 2,
+  "plate_number": "KDB 002A",
+  "truck_type": "Medium Truck",
+  "make": "Isuzu",
+  "model": "NPR",
+  "capacity_tons": "3.50",
+  "allocation_method": "auto",
+  "allocation_method_display": "Auto",
+  "assigned_at": "2026-06-05T08:00:00Z"
+}
+```
+
+| Value | Meaning |
+|---|---|
+| `auto` | Assigned by the auto-allocate algorithm |
+| `manual` | Assigned manually via `POST /jobs/:id/assign-trucks/` |
+
+**Frontend action:** Display a badge or label on each truck showing whether it was auto or manually assigned.
+
+---
+
+#### 5. Staff profile — ratings and scores removed from API
+
+`average_rating`, `total_reviews`, and `recommendation_score` are **no longer returned** by the staff profile or user API endpoints. The scores still exist internally and drive auto-allocation, but they are not exposed.
+
+**Affected endpoints:**
+- `GET /api/v1/users/<id>/staff-profile/`
+- `GET /api/v1/users/`
+- `GET /api/v1/users/available-staff/`
+
+**Frontend action:** Remove any display of `average_rating`, `recommendation_score`, or star ratings from the staff management screens.
+
+---
+
+#### 6. New move sizes — 4, 5, and 6 Bedroom
+
+Three new `move_size` values are now accepted:
+
+| Value | Label |
+|---|---|
+| `four_bedroom` | 4 Bedroom |
+| `five_bedroom` | 5 Bedroom |
+| `six_bedroom` | 6 Bedroom |
+
+**Frontend action:** Add these options to the job creation / edit form's move size dropdown.
+
+---
+
+#### 7. New pricing model — bedroom + distance (replaces old formula)
+
+The invoice calculation for bedroom moves is now completely different. The old base + per-km + per-staff + per-truck + VAT formula **no longer applies to bedroom jobs**.
+
+**New formula for 1–6 bedroom moves:**
+
+| Move size | Bedroom charge (KES) |
+|---|---:|
+| 1 Bedroom | 10,000 |
+| 2 Bedroom | 14,000 |
+| 3 Bedroom | 20,000 |
+| 4 Bedroom | 24,000 |
+| 5 Bedroom | 28,000 |
+| 6 Bedroom | 32,000 |
+
+| Distance | Distance charge (KES) |
+|---|---:|
+| Below 10 km | 3,000 |
+| 10 – 20 km | 6,000 |
+| 20 – 30 km | 9,000 |
+| 30 – 40 km | 12,000 |
+| Above 40 km | 12,000 (capped) |
+
+**Total = bedroom charge + distance charge** (no VAT, no staff charge, no truck charge for bedroom moves)
+
+Studio, office_small, and office_large jobs continue to use the legacy formula.
+
+**Invoice response fields — what to display:**
+
+```json
+{
+  "base_charge": "20000.00",
+  "distance_charge": "6000.00",
+  "staff_charge": "0.00",
+  "truck_charge": "0.00",
+  "subtotal": "26000.00",
+  "tax_rate": "0.0000",
+  "tax_amount": "0.00",
+  "total_amount": "26000.00"
+}
+```
+
+**Frontend action:** Update the invoice detail screen to render the new breakdown correctly. `staff_charge`, `truck_charge`, and `tax_amount` will be `0.00` for bedroom jobs — consider hiding those rows when zero.
+
+---
+
+#### 8. Disbursement model — flat KES 500 per staff + company profit
+
+**Before:** `amount_paid` was split equally among all staff.
+
+**Now:** Each staff member always receives a flat **KES 500**. The remainder is recorded as `company_profit` on the invoice.
+
+```
+company_profit = amount_paid − (500 × staff_count)
+```
+
+**Invoice now includes `company_profit`:**
+
+```json
+{
+  "amount_paid": "26000.00",
+  "company_profit": "24000.00",
+  ...
+}
+```
+
+**Disbursement response — each record will always show `amount: "500.00"`:**
+
+```json
+{
+  "message": "Payment disbursed to 4 staff member(s).",
+  "disbursements": [
+    {
+      "staff_name": "John Mwangi",
+      "amount": "500.00",
+      "status": "disbursed"
+    }
+  ]
+}
+```
+
+**Frontend action:**
+- On the disbursement confirmation screen, show **KES 500 per staff** as a fixed amount.
+- On the invoice detail / billing report, show a **Company Profit** line using `invoice.company_profit`.
+
+---
+
+#### 9. Reports — default window extended + `?all=true` + company profit
+
+| Change | Detail |
+|---|---|
+| Default `?days` | Changed from **30** to **365** — reports now show a full year by default |
+| `?all=true` | Pass this to any report endpoint to bypass the date filter entirely |
+| `company_profit` | Added to the billing report `revenue_totals` object |
+
+**Billing report — updated `revenue_totals` shape:**
+
+```json
+{
+  "revenue_totals": {
+    "total_invoiced": "520000.00",
+    "total_collected": "480000.00",
+    "total_outstanding": "40000.00",
+    "total_company_profit": "430000.00"
+  }
+}
+```
+
+**Frontend action:**
+- Add a **Company Profit** stat card or chart tile on the billing report / dashboard screen using `total_company_profit`.
+- Optionally add an "All time" toggle that appends `?all=true` to report API calls.
+
+---
+
+#### 10. New public endpoint — Full Price Guide (PDF)
+
+Clicking "Get a Quote" on the homepage downloads a **Smartmovers-branded PDF price guide** showing all pricing options at a glance. No form input or login required.
+
+```
+GET /api/v1/billing/quote/
+(no Authorization header, no request body)
+```
+
+**Response:** `application/pdf` file — `smartmovers_pricing.pdf`
+
+The PDF contains three sections:
+1. **Move Size Charges** — base price for each bedroom count (1–6 bedrooms)
+2. **Distance Charges** — price bracket per km band (< 10 km up to > 40 km)
+3. **Complete Price Matrix** — every move size × every distance band in a grid so the customer can find their exact total at a glance
+
+**Frontend implementation — single button, no form needed:**
+
+```js
+// Homepage "Get a Quote" button
+async function downloadPriceGuide() {
+  const response = await fetch(`${API_BASE}/billing/quote/`, {
+    method: 'GET',
+  })
+
+  if (!response.ok) return
+
+  const blob = await response.blob()
+  const url = URL.createObjectURL(blob)
+  const link = document.createElement('a')
+  link.href = url
+  link.download = 'smartmovers_pricing.pdf'
+  link.click()
+  URL.revokeObjectURL(url)
+}
+```
+
+Or even simpler — just use an anchor tag that opens the URL directly:
+
+```html
+<a href="https://e-movers-backend.onrender.com/api/v1/billing/quote/" download>
+  Get a Quote
+</a>
+```
+
+---
 
 ### What changed — 2026-05-05
 
@@ -678,7 +955,8 @@ POST /api/v1/fleet/
 | `POST` | `/api/v1/jobs/` | Admin | Create job |
 | `GET` | `/api/v1/jobs/unassigned/` | Admin + Staff | PENDING jobs with no staff or truck assignments |
 | `GET` / `PATCH` / `DELETE` | `/api/v1/jobs/<id>/` | Admin | Job detail; `DELETE` blocked if `in_progress` or `completed` |
-| `POST` | `/api/v1/jobs/<id>/auto-allocate/` | Admin | Auto-assign staff + trucks by score |
+| `POST` | `/api/v1/jobs/<id>/auto-allocate/` | Admin | Auto-assign staff + trucks (defaults to job's requested counts) |
+| `PATCH` | `/api/v1/jobs/<id>/change-supervisor/` | Admin | Swap the team leader on an assigned/in-progress job |
 | `POST` | `/api/v1/jobs/<id>/assign-staff/` | Admin | Manually assign specific staff |
 | `POST` | `/api/v1/jobs/<id>/assign-trucks/` | Admin | Manually assign specific trucks |
 | `POST` | `/api/v1/jobs/<id>/status/` | Admin + Staff | Transition job through status machine |
@@ -713,7 +991,7 @@ POST /api/v1/jobs/
 
 #### Move size values
 
-`studio` · `one_bedroom` · `two_bedroom` · `three_bedroom` · `office_small` · `office_large`
+`studio` · `one_bedroom` · `two_bedroom` · `three_bedroom` · `four_bedroom` · `five_bedroom` · `six_bedroom` · `office_small` · `office_large`
 
 #### Job status machine
 
@@ -749,16 +1027,39 @@ On `complete` or `cancel`: all assigned staff are released (`is_available=true`)
 POST /api/v1/jobs/<id>/auto-allocate/
 ```
 
+Body is **optional**. When omitted the job's own `requested_staff_count` and `requested_truck_count` are used:
+
+```json
+{}
+```
+
+To override the defaults:
 ```json
 {
-  "num_movers": 8,
+  "num_movers": 3,
   "num_trucks": 2
 }
 ```
 
-Defaults: `num_movers=10`, `num_trucks=1`.
+`num_movers` is the number of movers **excluding the supervisor** — total staff assigned = `num_movers + 1`.
 
 Selects active, available staff ordered by `recommendation_score DESC`. The top candidate becomes supervisor; the rest become movers. Safe to call multiple times — re-running releases the previous assignment first.
+
+---
+
+#### Change team leader (new)
+
+```
+PATCH /api/v1/jobs/<id>/change-supervisor/
+```
+
+```json
+{ "staff_id": 7 }
+```
+
+The target staff member must already be assigned to the job as a mover. The current supervisor is demoted to mover, and the target mover is promoted to supervisor.
+
+**Allowed on:** `assigned` and `in_progress` jobs only.
 
 #### Manual staff assignment
 
@@ -975,6 +1276,7 @@ Only possible if no attendance record exists yet for that staff member.
 
 | Method | Endpoint | Access | Description |
 |---|---|---|---|
+| `GET` | `/api/v1/billing/quote/` | **Public** | Download the full Smartmovers price guide PDF |
 | `GET` | `/api/v1/billing/invoices/` | Admin + Staff | List all invoices |
 | `POST` | `/api/v1/billing/invoices/generate/` | Admin | Calculate costs and create or refresh an invoice |
 | `GET` / `PATCH` | `/api/v1/billing/invoices/<id>/` | Admin + Staff | Invoice detail with full payment history |
@@ -983,19 +1285,36 @@ Only possible if no attendance record exists yet for that staff member.
 
 #### Cost formula (all amounts in KES)
 
+**Bedroom moves (1–6 bedrooms):**
+
+| Move size | Bedroom charge | Distance < 10 km | 10–20 km | 20–30 km | 30–40 km | > 40 km |
+|---|---:|---:|---:|---:|---:|---:|
+| 1 Bedroom | 10,000 | +3,000 | +6,000 | +9,000 | +12,000 | +12,000 |
+| 2 Bedroom | 14,000 | +3,000 | +6,000 | +9,000 | +12,000 | +12,000 |
+| 3 Bedroom | 20,000 | +3,000 | +6,000 | +9,000 | +12,000 | +12,000 |
+| 4 Bedroom | 24,000 | +3,000 | +6,000 | +9,000 | +12,000 | +12,000 |
+| 5 Bedroom | 28,000 | +3,000 | +6,000 | +9,000 | +12,000 | +12,000 |
+| 6 Bedroom | 32,000 | +3,000 | +6,000 | +9,000 | +12,000 | +12,000 |
+
+```
+Total = bedroom_charge + distance_charge   (no VAT, no per-staff, no per-truck)
+```
+
+**Studio / office moves (legacy formula):**
+
 ```
 Base charge      =  2,000
 Distance charge  =    100  ×  estimated_distance_km
 Staff charge     =    500  ×  assigned_staff_count
 Truck charge     =  1,500  ×  assigned_truck_count
-────────────────────────────────────────────────────
 Subtotal         =  sum of above
 VAT (16%)        =  subtotal × 0.16
-────────────────────────────────────────────────────
 Total            =  subtotal + VAT
 ```
 
 The formula runs fresh every time `generate/` is called. If assignments change before the job starts, call `generate/` again to get the updated amount.
+
+> **Tip:** For bedroom jobs `staff_charge`, `truck_charge`, and `tax_amount` will always be `"0.00"` — hide those rows on the invoice UI when they are zero.
 
 #### Generate an invoice
 
@@ -1052,11 +1371,16 @@ Partial payments are supported. Call this endpoint multiple times until `balance
 
 ### 8.9 Payment Disbursement
 
-After an invoice is fully paid, the admin disburses the collected amount equally among all staff who worked on the job. One `PaymentDisbursement` record is created per staff member.
+After an invoice is fully paid, the admin disburses **KES 500 flat** to each assigned staff member. The remainder is recorded as **company profit** on the invoice.
+
+```
+staff_payout   = 500 × staff_count
+company_profit = amount_paid − staff_payout
+```
 
 | Method | Endpoint | Access | Description |
 |---|---|---|---|
-| `POST` | `/api/v1/billing/invoices/<id>/disburse/` | Admin | Split collected amount equally to all assigned staff |
+| `POST` | `/api/v1/billing/invoices/<id>/disburse/` | Admin | Pay each staff member KES 500; remainder → company profit |
 | `GET` | `/api/v1/billing/disbursements/` | Admin | List all disbursement records |
 
 #### Disburse payment
@@ -1074,7 +1398,7 @@ No request body required.
 **Response `201`:**
 ```json
 {
-  "message": "Payment disbursed to 8 staff member(s).",
+  "message": "Payment disbursed to 4 staff member(s).",
   "disbursements": [
     {
       "id": 1,
@@ -1083,16 +1407,16 @@ No request body required.
       "staff": 5,
       "staff_name": "John Mwangi",
       "staff_email": "staff05@emovers.co.ke",
-      "amount": "3450.00",
+      "amount": "500.00",
       "status": "disbursed",
-      "disbursed_at": "2026-05-22T11:00:00Z",
-      "transaction_ref": "SIM-DSB-1716372000-A1B2C3D4"
+      "disbursed_at": "2026-06-05T11:00:00Z",
+      "transaction_ref": "SIM-DSB-1749115200-A1B2C3D4"
     }
   ]
 }
 ```
 
-Each disbursed staff member also receives a `payment_disbursed` notification.
+After disbursement, `invoice.company_profit` holds the net retained amount. Each disbursed staff member also receives a `payment_disbursed` notification.
 
 #### Query parameters for `GET /api/v1/billing/disbursements/`
 
@@ -1242,30 +1566,45 @@ All report endpoints are **Admin only**. Staff receive `403 Forbidden`.
 | `GET` | `/api/v1/reports/attendance/` | `?days=30` | Confirmation rates per job and per staff member |
 | `GET` | `/api/v1/reports/applications/` | `?days=30` | Application volume, approval rate, open applications by job |
 
-**`?days=N`** controls the lookback window (1–365, default 30).
+**`?days=N`** controls the lookback window (default **365**, max 3650). Pass **`?all=true`** to bypass the date filter entirely and return all-time data.
 
 #### Dashboard response shape
 
 ```json
 {
-  "window_days": 30,
+  "window_days": 365,
   "staff": { "total_active": 15, "available": 12, "on_job": 3 },
   "fleet":  { "total": 6, "available": 4, "on_job": 2, "maintenance": 0 },
   "jobs": {
     "total": 25,
     "pending": 4, "assigned": 2, "in_progress": 1, "completed": 15, "cancelled": 3,
     "unassigned_needing_attention": 2,
-    "created_last_30_days": 8
+    "created_last_365_days": 25
   },
   "billing": {
-    "total_invoiced": "348000.00",
-    "total_collected": "280000.00",
-    "total_outstanding": "68000.00",
-    "unpaid_invoices": 5
+    "total_invoiced": "520000.00",
+    "total_collected": "480000.00",
+    "total_outstanding": "40000.00",
+    "unpaid_invoices": 3
   },
-  "customers": { "total": 42, "new_last_30_days": 6 }
+  "customers": { "total": 42, "new_last_365_days": 42 }
 }
 ```
+
+#### Billing report — `revenue_totals` shape (updated)
+
+```json
+{
+  "revenue_totals": {
+    "total_invoiced": "520000.00",
+    "total_collected": "480000.00",
+    "total_outstanding": "40000.00",
+    "total_company_profit": "430000.00"
+  }
+}
+```
+
+`total_company_profit` is the sum of `invoice.company_profit` across all disbursed invoices in the window — use this to build a profit chart or stat card.
 
 #### Attendance report response shape
 
@@ -1757,6 +2096,7 @@ Pagination: responses include `count`, `next`, `previous`, `results`.
 | View applicants | `GET /jobs/:id/applications/` | Admin |
 | Approve applicants | `POST /jobs/:id/approve-applications/` | Admin |
 | Auto-allocate | `POST /jobs/:id/auto-allocate/` | Admin |
+| Change team leader | `PATCH /jobs/:id/change-supervisor/ {"staff_id": N}` | Admin |
 | Assign staff manually | `POST /jobs/:id/assign-staff/` | Admin |
 | Assign trucks manually | `POST /jobs/:id/assign-trucks/` | Admin |
 | Start job | `POST /jobs/:id/status/ {"action":"start"}` | Admin + Supervisor |
@@ -1808,11 +2148,23 @@ Pagination: responses include `count`, `next`, `previous`, `results`.
 | Action | API Call |
 |---|---|
 | List all staff | `GET /users/?role=mover-staff` |
-| Available staff ranked by score | `GET /users/available-staff/` |
+| Available staff | `GET /users/available-staff/` |
 | View staff profile | `GET /users/:id/staff-profile/` |
-| Update availability/notes | `PATCH /users/:id/staff-profile/` |
+| Update availability/notes | `PATCH /users/:id/staff-profile/ {"is_available": true, "notes": "..."}` |
 | Deactivate staff | `DELETE /users/:id/` |
 | Register new staff | `POST /auth/register/` |
+
+> **Note:** `average_rating`, `recommendation_score`, and `total_reviews` are **no longer in the API response**. Do not display rating stars or score bars on staff management screens.
+
+---
+
+#### Homepage — Get a Quote (public, no login)
+
+| Action | API Call |
+|---|---|
+| Download full price guide PDF | `GET /billing/quote/` |
+
+No body, no login. Returns `application/pdf` — wire the button directly to this URL or use `fetch` to trigger a download (see the What Changed section above for both patterns).
 
 ---
 
@@ -1824,7 +2176,7 @@ Pagination: responses include `count`, `next`, `previous`, `results`.
 | Generate invoice for a job | `POST /billing/invoices/generate/` |
 | View invoice detail | `GET /billing/invoices/:id/` |
 | Record payment | `POST /billing/invoices/:id/pay/` |
-| Disburse to staff | `POST /billing/invoices/:id/disburse/` |
+| Disburse to staff (KES 500 each) | `POST /billing/invoices/:id/disburse/` |
 
 ---
 

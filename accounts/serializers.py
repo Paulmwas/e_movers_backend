@@ -10,16 +10,10 @@ class StaffProfileSerializer(serializers.ModelSerializer):
         model = StaffProfile
         fields = [
             "is_available",
-            "average_rating",
-            "total_reviews",
-            "recommendation_score",
             "notes",
             "updated_at",
         ]
         read_only_fields = [
-            "average_rating",
-            "total_reviews",
-            "recommendation_score",
             "updated_at",
         ]
 

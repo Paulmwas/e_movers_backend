@@ -38,7 +38,7 @@ class ApplicationError(Exception):
 # ---------------------------------------------------------------------------
 
 @transaction.atomic
-def auto_allocate_job(job: Job, requested_by: User, num_movers: int = 10, num_trucks: int = 1):
+def auto_allocate_job(job: Job, requested_by: User, num_movers: int = None, num_trucks: int = None):
     """
     Fully automatic allocation of staff and trucks to a job.
 
@@ -54,6 +54,9 @@ def auto_allocate_job(job: Job, requested_by: User, num_movers: int = 10, num_tr
       6. Lock staff as unavailable, lock trucks as on_job.
       7. Transition job to ASSIGNED status.
 
+    num_movers defaults to job.requested_staff_count - 1 (leaving 1 slot for supervisor).
+    num_trucks defaults to job.requested_truck_count.
+
     Raises AllocationError if there are not enough staff or trucks available.
     """
     if job.status not in (Job.Status.PENDING, Job.Status.ASSIGNED):
@@ -61,6 +64,12 @@ def auto_allocate_job(job: Job, requested_by: User, num_movers: int = 10, num_tr
             f"Cannot allocate a job with status '{job.get_status_display()}'. "
             "Only PENDING or ASSIGNED jobs can be re-allocated."
         )
+
+    # Default to the job's own staff/truck requirements when not explicitly overridden
+    if num_movers is None:
+        num_movers = max(job.requested_staff_count - 1, 1)
+    if num_trucks is None:
+        num_trucks = max(job.requested_truck_count, 1)
 
     # --- Staff pool: active staff ordered by recommendation score ---
     total_staff_needed = num_movers + 1  # +1 for supervisor
@@ -117,9 +126,14 @@ def auto_allocate_job(job: Job, requested_by: User, num_movers: int = 10, num_tr
         for mover in movers
     ])
 
-    # --- Create truck assignments ---
+    # --- Create truck assignments (marked as auto-allocated) ---
     JobTruck.objects.bulk_create([
-        JobTruck(job=job, truck=truck, assigned_by=requested_by)
+        JobTruck(
+            job=job,
+            truck=truck,
+            assigned_by=requested_by,
+            allocation_method=JobTruck.AllocationMethod.AUTO,
+        )
         for truck in available_trucks
     ])
 

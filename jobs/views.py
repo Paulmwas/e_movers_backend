@@ -22,6 +22,7 @@ from .serializers import (
     JobCreateSerializer,
     JobUpdateSerializer,
     AutoAllocateSerializer,
+    ChangeTeamLeaderSerializer,
     AssignStaffSerializer,
     AssignTrucksSerializer,
     JobStatusSerializer,
@@ -171,10 +172,10 @@ class AutoAllocateView(APIView):
     """
     Admin only: auto-allocate staff and trucks to a job.
 
-    POST body (optional):
+    POST body (all optional — defaults to job's requested_staff_count / requested_truck_count):
       {
-        "num_movers": 10,   // default 10
-        "num_trucks": 1     // default 1
+        "num_movers": 3,    // override number of movers (excludes supervisor)
+        "num_trucks": 1     // override number of trucks
       }
 
     Selects staff ordered by recommendation_score DESC, assigns the
@@ -193,8 +194,8 @@ class AutoAllocateView(APIView):
             updated_job = auto_allocate_job(
                 job=job,
                 requested_by=request.user,
-                num_movers=serializer.validated_data["num_movers"],
-                num_trucks=serializer.validated_data["num_trucks"],
+                num_movers=serializer.validated_data.get("num_movers"),
+                num_trucks=serializer.validated_data.get("num_trucks"),
             )
         except AllocationError as e:
             return Response({"error": str(e)}, status=status.HTTP_400_BAD_REQUEST)
@@ -206,6 +207,75 @@ class AutoAllocateView(APIView):
                     updated_job,
                     context={"request": request},
                 ).data,
+            }
+        )
+
+
+class ChangeTeamLeaderView(APIView):
+    """
+    Admin only: swap the supervisor on an assigned or in-progress job.
+
+    PATCH body:
+      { "staff_id": <int> }
+
+    The target staff member must already be assigned to this job as a mover.
+    The current supervisor is demoted to mover; the target mover is promoted
+    to supervisor.
+    """
+    permission_classes = [IsAuthenticated, IsMoverAdmin]
+
+    def patch(self, request, pk):
+        job = get_object_or_404(
+            Job.objects.prefetch_related("assignments__staff"),
+            pk=pk,
+        )
+
+        if job.status not in (Job.Status.ASSIGNED, Job.Status.IN_PROGRESS):
+            return Response(
+                {"error": "Team leader can only be changed on ASSIGNED or IN_PROGRESS jobs."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        serializer = ChangeTeamLeaderSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        new_supervisor_id = serializer.validated_data["staff_id"]
+
+        try:
+            current_supervisor_assignment = job.assignments.get(role=JobAssignment.Role.SUPERVISOR)
+        except JobAssignment.DoesNotExist:
+            return Response(
+                {"error": "This job has no supervisor assigned yet."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if current_supervisor_assignment.staff_id == new_supervisor_id:
+            return Response(
+                {"error": "This staff member is already the supervisor."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        try:
+            new_supervisor_assignment = job.assignments.get(
+                staff_id=new_supervisor_id,
+                role=JobAssignment.Role.MOVER,
+            )
+        except JobAssignment.DoesNotExist:
+            return Response(
+                {"error": "The target staff member is not assigned to this job as a mover."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        current_supervisor_assignment.role = JobAssignment.Role.MOVER
+        current_supervisor_assignment.save(update_fields=["role"])
+
+        new_supervisor_assignment.role = JobAssignment.Role.SUPERVISOR
+        new_supervisor_assignment.save(update_fields=["role"])
+
+        job.refresh_from_db()
+        return Response(
+            {
+                "message": "Team leader updated successfully.",
+                "job": JobDetailSerializer(job, context={"request": request}).data,
             }
         )
 
