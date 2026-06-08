@@ -134,7 +134,7 @@ SIMPLE_JWT = {
     "AUTH_HEADER_TYPES": ("Bearer",),
     "TOKEN_OBTAIN_PAIR_SERIALIZER": "rest_framework_simplejwt.serializers.TokenObtainPairSerializer",
 }
-
+CORS_ALLOW_ALL_ORIGINS = True
 # ---------------------------------------------------------------------------
 # CORS
 # ---------------------------------------------------------------------------
