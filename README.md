@@ -39,7 +39,114 @@
 
 ## Updates
 
-> **Last updated: 2026-06-05**
+> **Last updated: 2026-06-07**
+
+### What changed — 2026-06-07
+
+#### 1. Email notification to all staff on auto-allocation
+
+Whenever a job is **auto-allocated**, every assigned staff member (supervisor and all movers) now receives both an **in-app notification** and a branded **HTML email** confirming their assignment.
+
+- Notification type: `job_allocated`
+- Subject: `"You've been assigned to: <job title>"`
+- Email includes: job title, scheduled date, pickup address, drop-off address
+- No admin action required — fires automatically at the end of `POST /jobs/:id/auto-allocate/`
+
+**Frontend action:** Add `job_allocated` to the notification bell's type-display map:
+
+| Type | Label |
+|---|---|
+| `job_allocated` | Job Assigned (Auto) |
+
+---
+
+#### 2. Invoice now shows move size
+
+Every invoice response now includes two new read-only fields:
+
+```json
+{
+  "move_size": "three_bedroom",
+  "move_size_display": "3 Bedroom",
+  ...
+}
+```
+
+**Frontend action:** On the invoice detail screen, show the move size (e.g. "3 Bedroom") prominently — it helps identify which pricing tier the invoice was calculated on.
+
+---
+
+#### 3. Staff charge and truck charge are no longer zero on bedroom invoices
+
+Previously `staff_charge` and `truck_charge` were always `"0.00"` for bedroom jobs. They now reflect the actual cost allocation:
+
+| Field | Value |
+|---|---|
+| `staff_charge` | `500 × assigned_staff_count` |
+| `truck_charge` | `1,500 × assigned_truck_count` |
+
+These are **informational breakdown fields** — they show how the revenue is allocated. The customer-facing **total is unchanged**: `total_amount = base_charge + distance_charge`.
+
+**Sample invoice for a 3-bedroom move at 15 km with 4 staff and 1 truck:**
+
+```json
+{
+  "move_size": "three_bedroom",
+  "move_size_display": "3 Bedroom",
+  "base_charge": "20000.00",
+  "distance_charge": "6000.00",
+  "staff_charge": "2000.00",
+  "truck_charge": "1500.00",
+  "subtotal": "26000.00",
+  "tax_rate": "0.0000",
+  "tax_amount": "0.00",
+  "total_amount": "26000.00"
+}
+```
+
+**Frontend action:**
+- **Remove** any logic that hides `staff_charge` / `truck_charge` when zero.
+- Render them as an **"Operational Breakdown"** sub-section (e.g. "Staff payout: KES 2,000 · Truck cost: KES 1,500") separate from the customer price line.
+- `total_amount` is still what the customer pays — do not add `staff_charge + truck_charge` to the displayed total.
+
+---
+
+#### 4. Auto-allocate response includes full truck details
+
+The response from `POST /jobs/:id/auto-allocate/` now includes the complete truck object for each allocated truck (previously the response could return empty truck details due to a stale cache):
+
+```json
+{
+  "message": "Job allocated successfully.",
+  "job": {
+    ...
+    "trucks": [
+      {
+        "id": 1,
+        "truck": 2,
+        "plate_number": "KDB 002A",
+        "truck_type": "Medium Truck",
+        "make": "Isuzu",
+        "model": "NPR",
+        "capacity_tons": "3.50",
+        "allocation_method": "AUTO",
+        "allocation_method_display": "Auto",
+        "assigned_at": "2026-06-07T08:00:00Z"
+      }
+    ]
+  }
+}
+```
+
+**Frontend action:** On the post-allocation success screen, display the allocated truck(s) with plate number, make, model, and capacity. No API re-fetch needed — the `trucks` array in the response is now complete.
+
+---
+
+#### 5. Email templates updated to Smartmovers branding
+
+All system emails (assignment confirmation, payment disbursed) now show **Smartmovers** in the header instead of the old "E-Movers" label. No frontend action needed.
+
+---
 
 ### What changed — 2026-06-05
 
@@ -1314,7 +1421,7 @@ Total            =  subtotal + VAT
 
 The formula runs fresh every time `generate/` is called. If assignments change before the job starts, call `generate/` again to get the updated amount.
 
-> **Tip:** For bedroom jobs `staff_charge`, `truck_charge`, and `tax_amount` will always be `"0.00"` — hide those rows on the invoice UI when they are zero.
+> **Invoice breakdown for bedroom jobs:** `base_charge` + `distance_charge` = `total_amount` (what the customer pays). `staff_charge` (500 × staff) and `truck_charge` (1,500 × trucks) are **informational only** — do not add them to the displayed total. `tax_amount` is always `"0.00"` for bedroom jobs — hide it.
 
 #### Generate an invoice
 
@@ -1525,9 +1632,10 @@ GET /api/v1/notifications/?is_read=false
 
 | Type | When it fires |
 |---|---|
-| `application_approved` | Staff member is approved for a job |
+| `application_approved` | Staff member is approved for a job (manual approval flow) |
 | `application_rejected` | Staff member is not selected for a job |
 | `job_team_announced` | Full team list shared after approval |
+| `job_allocated` | Staff member is automatically assigned via auto-allocate |
 | `attendance_reminder` | (extensible — send via admin or Celery task) |
 | `payment_disbursed` | Staff member's share has been disbursed |
 | `review_received` | Staff member received a new review |

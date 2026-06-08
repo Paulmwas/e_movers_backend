@@ -112,10 +112,14 @@ def generate_invoice(job: Job, created_by, due_date=None, notes: str = "") -> In
 
     if job.move_size in BEDROOM_PRICES:
         # Bedroom move — new pricing model
+        # Staff/truck charges are informational (show cost allocation); they do
+        # not inflate the customer total — total = bedroom + distance only.
+        staff_count = job.assignments.count()
+        truck_count = job.job_trucks.count()
         base_charge = BEDROOM_PRICES[job.move_size]
         dist_charge = _distance_charge(distance_km)
-        staff_charge = Decimal("0.00")
-        truck_charge = Decimal("0.00")
+        staff_charge = STAFF_DISBURSEMENT_FLAT * staff_count
+        truck_charge = LEGACY_RATE_PER_TRUCK * truck_count
         subtotal = base_charge + dist_charge
         tax_rate = Decimal("0.00")
         tax_amount = Decimal("0.00")

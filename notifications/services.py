@@ -28,35 +28,18 @@ logger = logging.getLogger(__name__)
 # HTML email builders
 # ---------------------------------------------------------------------------
 
-def _build_application_approved_html(recipient, title: str, body: str, job) -> str:
-    name = recipient.get_full_name() or recipient.email
-
+def _job_detail_box(job) -> str:
+    if not job:
+        return ""
     time_row = ""
-    if job and job.scheduled_time:
+    if job.scheduled_time:
         time_row = f"""
             <tr>
               <td style="padding:5px 0;color:#374151;font-size:14px;">
                 <strong>Time:</strong> {job.scheduled_time.strftime('%I:%M %p')}
               </td>
             </tr>"""
-
-    location_rows = ""
-    if job:
-        location_rows = f"""
-            <tr>
-              <td style="padding:5px 0;color:#374151;font-size:14px;">
-                <strong>Pickup:</strong> {job.pickup_address}
-              </td>
-            </tr>
-            <tr>
-              <td style="padding:5px 0;color:#374151;font-size:14px;">
-                <strong>Drop-off:</strong> {job.dropoff_address}
-              </td>
-            </tr>"""
-
-    job_box = ""
-    if job:
-        job_box = f"""
+    return f"""
         <table cellpadding="0" cellspacing="0" border="0"
                style="width:100%;background:#eff6ff;border-left:4px solid #1a56db;
                       border-radius:4px;padding:14px 16px;margin:20px 0;">
@@ -71,9 +54,20 @@ def _build_application_approved_html(recipient, title: str, body: str, job) -> s
             </td>
           </tr>
           {time_row}
-          {location_rows}
+          <tr>
+            <td style="padding:5px 0;color:#374151;font-size:14px;">
+              <strong>Pickup:</strong> {job.pickup_address}
+            </td>
+          </tr>
+          <tr>
+            <td style="padding:5px 0;color:#374151;font-size:14px;">
+              <strong>Drop-off:</strong> {job.dropoff_address}
+            </td>
+          </tr>
         </table>"""
 
+
+def _email_wrapper(header_bg: str, header_subtitle: str, body_html: str) -> str:
     return f"""<!DOCTYPE html>
 <html>
 <head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head>
@@ -83,28 +77,20 @@ def _build_application_approved_html(recipient, title: str, body: str, job) -> s
                 border-radius:8px;overflow:hidden;
                 box-shadow:0 1px 6px rgba(0,0,0,0.10);">
     <tr>
-      <td style="background:#1a56db;padding:24px 32px;">
-        <p style="margin:0;color:#ffffff;font-size:20px;font-weight:bold;">E-Movers</p>
-        <p style="margin:4px 0 0;color:#bfdbfe;font-size:13px;">Job Assignment Confirmation</p>
+      <td style="background:{header_bg};padding:24px 32px;">
+        <p style="margin:0;color:#ffffff;font-size:20px;font-weight:bold;">Smartmovers</p>
+        <p style="margin:4px 0 0;color:rgba(255,255,255,0.75);font-size:13px;">{header_subtitle}</p>
       </td>
     </tr>
     <tr>
       <td style="padding:28px 32px;">
-        <p style="margin:0 0 12px;font-size:16px;color:#111827;">Hi {name},</p>
-        <p style="margin:0 0 4px;font-size:15px;color:#374151;line-height:1.6;">
-          Great news — you have been selected for an upcoming move!
-        </p>
-        {job_box}
-        <p style="margin:0 0 16px;font-size:14px;color:#374151;line-height:1.7;white-space:pre-line;">{body}</p>
-        <p style="margin:0;font-size:14px;color:#6b7280;">
-          Check the app for full job details. If you have questions, contact your team supervisor.
-        </p>
+        {body_html}
       </td>
     </tr>
     <tr>
       <td style="background:#f9fafb;padding:14px 32px;border-top:1px solid #e5e7eb;">
         <p style="margin:0;font-size:12px;color:#9ca3af;text-align:center;">
-          Automated message from E-Movers &mdash; please do not reply to this email.
+          Automated message from Smartmovers &mdash; please do not reply to this email.
         </p>
       </td>
     </tr>
@@ -113,26 +99,42 @@ def _build_application_approved_html(recipient, title: str, body: str, job) -> s
 </html>"""
 
 
+def _build_application_approved_html(recipient, title: str, body: str, job) -> str:
+    name = recipient.get_full_name() or recipient.email
+    body_html = f"""
+        <p style="margin:0 0 12px;font-size:16px;color:#111827;">Hi {name},</p>
+        <p style="margin:0 0 4px;font-size:15px;color:#374151;line-height:1.6;">
+          Great news — you have been selected for an upcoming move!
+        </p>
+        {_job_detail_box(job)}
+        <p style="margin:0 0 16px;font-size:14px;color:#374151;line-height:1.7;white-space:pre-line;">{body}</p>
+        <p style="margin:0;font-size:14px;color:#6b7280;">
+          Check the app for full job details. If you have questions, contact your team supervisor.
+        </p>"""
+    return _email_wrapper("#1a56db", "Job Assignment Confirmation", body_html)
+
+
+def _build_job_allocated_html(recipient, title: str, body: str, job) -> str:
+    name = recipient.get_full_name() or recipient.email
+    body_html = f"""
+        <p style="margin:0 0 12px;font-size:16px;color:#111827;">Hi {name},</p>
+        <p style="margin:0 0 4px;font-size:15px;color:#374151;line-height:1.6;">
+          You have been <strong>automatically assigned</strong> to an upcoming move.
+          Please review the details below and be ready on the scheduled date.
+        </p>
+        {_job_detail_box(job)}
+        <p style="margin:0 0 16px;font-size:14px;color:#374151;line-height:1.7;white-space:pre-line;">{body}</p>
+        <p style="margin:0;font-size:14px;color:#6b7280;">
+          Log in to the app to see your role and full assignment details.
+          Contact the office if you have any questions.
+        </p>"""
+    return _email_wrapper("#1a56db", "Auto-Allocation Notice", body_html)
+
+
 def _build_payment_disbursed_html(recipient, title: str, body: str, job) -> str:
     name = recipient.get_full_name() or recipient.email
     job_name = job.title if job else "your recent job"
-
-    return f"""<!DOCTYPE html>
-<html>
-<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head>
-<body style="margin:0;padding:0;background:#f3f4f6;font-family:Arial,Helvetica,sans-serif;">
-  <table cellpadding="0" cellspacing="0" border="0"
-         style="max-width:600px;margin:32px auto;background:#ffffff;
-                border-radius:8px;overflow:hidden;
-                box-shadow:0 1px 6px rgba(0,0,0,0.10);">
-    <tr>
-      <td style="background:#057a55;padding:24px 32px;">
-        <p style="margin:0;color:#ffffff;font-size:20px;font-weight:bold;">E-Movers</p>
-        <p style="margin:4px 0 0;color:#bcf0da;font-size:13px;">Payment Disbursed</p>
-      </td>
-    </tr>
-    <tr>
-      <td style="padding:28px 32px;">
+    body_html = f"""
         <p style="margin:0 0 12px;font-size:16px;color:#111827;">Hi {name},</p>
         <p style="margin:0 0 4px;font-size:15px;color:#374151;line-height:1.6;">
           Your payment for <strong>{job_name}</strong> has been disbursed.
@@ -146,25 +148,15 @@ def _build_payment_disbursed_html(recipient, title: str, body: str, job) -> str:
         </table>
         <p style="margin:0;font-size:14px;color:#6b7280;">
           Thank you for your hard work. Your payment should reflect in your account shortly.
-        </p>
-      </td>
-    </tr>
-    <tr>
-      <td style="background:#f9fafb;padding:14px 32px;border-top:1px solid #e5e7eb;">
-        <p style="margin:0;font-size:12px;color:#9ca3af;text-align:center;">
-          Automated message from E-Movers &mdash; please do not reply to this email.
-        </p>
-      </td>
-    </tr>
-  </table>
-</body>
-</html>"""
+        </p>"""
+    return _email_wrapper("#057a55", "Payment Disbursed", body_html)
 
 
 # Map notification_type → HTML builder.
 # Only types listed here trigger an email; all others are in-app only.
 _HTML_BUILDERS = {
     "application_approved": _build_application_approved_html,
+    "job_allocated": _build_job_allocated_html,
     "payment_disbursed": _build_payment_disbursed_html,
 }
 

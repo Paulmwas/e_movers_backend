@@ -43,6 +43,8 @@ class InvoiceSerializer(serializers.ModelSerializer):
         source="get_payment_status_display", read_only=True
     )
     job_title = serializers.CharField(source="job.title", read_only=True)
+    move_size = serializers.CharField(source="job.move_size", read_only=True)
+    move_size_display = serializers.CharField(source="job.get_move_size_display", read_only=True)
     customer_name = serializers.SerializerMethodField()
     created_by_name = serializers.SerializerMethodField()
 
@@ -52,6 +54,8 @@ class InvoiceSerializer(serializers.ModelSerializer):
             "id",
             "job",
             "job_title",
+            "move_size",
+            "move_size_display",
             "customer_name",
             "base_charge",
             "distance_charge",
@@ -76,6 +80,8 @@ class InvoiceSerializer(serializers.ModelSerializer):
         ]
         read_only_fields = [
             "id",
+            "move_size",
+            "move_size_display",
             "base_charge",
             "distance_charge",
             "staff_charge",

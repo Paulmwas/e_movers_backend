@@ -200,6 +200,12 @@ class AutoAllocateView(APIView):
         except AllocationError as e:
             return Response({"error": str(e)}, status=status.HTTP_400_BAD_REQUEST)
 
+        # Reload with full truck + staff details for the response
+        updated_job = Job.objects.prefetch_related(
+            "assignments__staff__staff_profile",
+            "job_trucks__truck",
+        ).get(pk=updated_job.pk)
+
         return Response(
             {
                 "message": "Job allocated successfully.",

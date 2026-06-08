@@ -150,6 +150,24 @@ def auto_allocate_job(job: Job, requested_by: User, num_movers: int = None, num_
     job.status = Job.Status.ASSIGNED
     job.save(update_fields=["status", "updated_at"])
 
+    # --- Notify all allocated staff by email ---
+    try:
+        from notifications.services import notify_many
+        all_allocated_staff = [supervisor_user] + list(movers)
+        notify_many(
+            recipients=all_allocated_staff,
+            notification_type="job_allocated",
+            title=f"You've been assigned to: {job.title}",
+            body=(
+                f"You have been automatically assigned to '{job.title}' "
+                f"scheduled for {job.scheduled_date.strftime('%A, %d %B %Y')}. "
+                f"Log in to the app for your role and full job details."
+            ),
+            job=job,
+        )
+    except Exception:
+        pass  # Email is non-critical; never break allocation
+
     return job
 
 
