@@ -37,7 +37,6 @@ class ApplicationError(Exception):
 # Auto-allocation
 # ---------------------------------------------------------------------------
 
-@transaction.atomic
 def auto_allocate_job(job: Job, requested_by: User, num_movers: int = None, num_trucks: int = None):
     """
     Fully automatic allocation of staff and trucks to a job.
@@ -46,32 +45,54 @@ def auto_allocate_job(job: Job, requested_by: User, num_movers: int = None, num_
       1. Clear any existing assignments for this job (idempotent re-run).
       2. Fetch all active staff who are currently available,
          ordered by recommendation_score DESC (best candidates first).
-         Minimum recommendation_score ensures even low-rated staff
-         still appear in the pool when no one better is available.
-      3. The first staff member in the sorted list becomes the SUPERVISOR.
-      4. The next `num_movers` staff become MOVERs.
-      5. Fetch `num_trucks` available trucks ordered by capacity DESC.
-      6. Lock staff as unavailable, lock trucks as on_job.
-      7. Transition job to ASSIGNED status.
+      3. The first staff member becomes SUPERVISOR; the rest become MOVERs.
+      4. Fetch available trucks ordered by capacity DESC.
+      5. Lock staff as unavailable, lock trucks as on_job.
+      6. Transition job to ASSIGNED status.
+      7. Send email notifications to allocated staff (outside the transaction).
 
     num_movers defaults to job.requested_staff_count - 1 (leaving 1 slot for supervisor).
     num_trucks defaults to job.requested_truck_count.
 
     Raises AllocationError if there are not enough staff or trucks available.
     """
+    job, allocated_staff = _auto_allocate_db(job, requested_by, num_movers, num_trucks)
+
+    # Notifications run after the transaction commits so SMTP cannot hold DB locks
+    # or cause a gunicorn timeout that rolls back the allocation.
+    try:
+        from notifications.services import notify_many
+        notify_many(
+            recipients=allocated_staff,
+            notification_type="job_allocated",
+            title=f"You've been assigned to: {job.title}",
+            body=(
+                f"You have been automatically assigned to '{job.title}' "
+                f"scheduled for {job.scheduled_date.strftime('%A, %d %B %Y')}. "
+                f"Log in to the app for your role and full job details."
+            ),
+            job=job,
+        )
+    except Exception:
+        pass  # Email is non-critical; allocation is already committed
+
+    return job
+
+
+@transaction.atomic
+def _auto_allocate_db(job: Job, requested_by: User, num_movers: int = None, num_trucks: int = None):
+    """Atomic DB portion of auto-allocation. Returns (job, allocated_staff_list)."""
     if job.status not in (Job.Status.PENDING, Job.Status.ASSIGNED):
         raise AllocationError(
             f"Cannot allocate a job with status '{job.get_status_display()}'. "
             "Only PENDING or ASSIGNED jobs can be re-allocated."
         )
 
-    # Default to the job's own staff/truck requirements when not explicitly overridden
     if num_movers is None:
         num_movers = max(job.requested_staff_count - 1, 1)
     if num_trucks is None:
         num_trucks = max(job.requested_truck_count, 1)
 
-    # --- Staff pool: active staff ordered by recommendation score ---
     total_staff_needed = num_movers + 1  # +1 for supervisor
 
     available_staff = list(
@@ -91,7 +112,6 @@ def auto_allocate_job(job: Job, requested_by: User, num_movers: int = None, num_
             f"found {len(available_staff)} available."
         )
 
-    # --- Truck pool ---
     available_trucks = list(
         Truck.objects.filter(status=Truck.Status.AVAILABLE)
         .order_by("-capacity_tons")[:num_trucks]
@@ -103,10 +123,8 @@ def auto_allocate_job(job: Job, requested_by: User, num_movers: int = None, num_
             f"Need {num_trucks}, found {len(available_trucks)} available."
         )
 
-    # --- Clear existing assignments (re-run safety) ---
     _release_existing_assignments(job)
 
-    # --- Create assignments ---
     supervisor_user = available_staff[0]
     movers = available_staff[1:]
 
@@ -126,7 +144,6 @@ def auto_allocate_job(job: Job, requested_by: User, num_movers: int = None, num_
         for mover in movers
     ])
 
-    # --- Create truck assignments (marked as auto-allocated) ---
     JobTruck.objects.bulk_create([
         JobTruck(
             job=job,
@@ -137,7 +154,6 @@ def auto_allocate_job(job: Job, requested_by: User, num_movers: int = None, num_
         for truck in available_trucks
     ])
 
-    # --- Lock resources ---
     StaffProfile.objects.filter(
         user__in=available_staff
     ).update(is_available=False)
@@ -146,29 +162,10 @@ def auto_allocate_job(job: Job, requested_by: User, num_movers: int = None, num_
         status=Truck.Status.ON_JOB
     )
 
-    # --- Transition job status ---
     job.status = Job.Status.ASSIGNED
     job.save(update_fields=["status", "updated_at"])
 
-    # --- Notify all allocated staff by email ---
-    try:
-        from notifications.services import notify_many
-        all_allocated_staff = [supervisor_user] + list(movers)
-        notify_many(
-            recipients=all_allocated_staff,
-            notification_type="job_allocated",
-            title=f"You've been assigned to: {job.title}",
-            body=(
-                f"You have been automatically assigned to '{job.title}' "
-                f"scheduled for {job.scheduled_date.strftime('%A, %d %B %Y')}. "
-                f"Log in to the app for your role and full job details."
-            ),
-            job=job,
-        )
-    except Exception:
-        pass  # Email is non-critical; never break allocation
-
-    return job
+    return job, [supervisor_user] + list(movers)
 
 
 # ---------------------------------------------------------------------------
